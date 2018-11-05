@@ -236,4 +236,4 @@ class VAE(nn.Module):
 
         loss = (px_given_z + kl + mmd)/target.shape[0]
 
-        return loss
+        return loss, px_given_z.item(), kl.item(), mmd.item()
