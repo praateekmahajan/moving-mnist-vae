@@ -6,7 +6,6 @@ import torch
 import torch.nn.functional as F
 from sklearn.cluster import KMeans
 from sklearn.externals import joblib
-from torchvision import transforms
 from tqdm import tqdm_notebook as tqdm
 
 from movingmnistdataset import MovingMNISTDataset
@@ -289,3 +288,15 @@ def save_kmeans_file(n_clusters):
     joblib.dump(kmeans_dict, "data/kmeans_{:}.model".format(n_clusters))
 
     return kmeans.cluster_centers_, mean_list_avg, std_list_avg
+def isFloat(s):
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
+def add_bool_arg(parser, name, default=False):
+    group = parser.add_mutually_exclusive_group(required=False)
+    group.add_argument('--' + name, dest=name, action='store_true')
+    group.add_argument('--no-' + name, dest=name, action='store_false')
+    parser.set_defaults(**{name:default})
