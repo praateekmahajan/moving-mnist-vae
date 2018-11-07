@@ -156,6 +156,9 @@ class VAE(nn.Module):
         super(VAE, self).__init__()
         self.require_rsample = require_rsample
 
+
+        # require rsample and mmd can't be true at the same time
+        # assert((not require_rsample and mmd)
         # assert (self.need_logvar and self.require_rsample), "For KL we require rsample to be true"
         # assert not (mmd == 0 and self.require_rsample), "For MMD we require rsample to be false"
         # assert (
@@ -176,6 +179,7 @@ class VAE(nn.Module):
         self.encoder = VAE_Encoder(in_channels, intermediate_channels, z_dimension, require_rsample)
         self.decoder = VAE_Decoder(z_dimension, intermediate_channels, decoder_output)
         self.adjust = (64 - input_image_size)//2
+
     def forward(self, x, sample=None):
         mu, logvar = self.encoder(x)
 
@@ -256,6 +260,6 @@ class VAE(nn.Module):
         else:
             px_given_z = - self.nll * Normal(reconstruction, self.sigma_decoder).log_prob(target).sum()
 
-        loss = (px_given_z + self.kl * kl + self.mmd * mmd)/target.shape[0]
-        
-        return loss, px_given_z.item(), kl.item(), mmd.item()
+        loss = (px_given_z + (self.kl * kl) + (self.mmd * mmd))/target.shape[0]
+
+        return loss, px_given_z.item()/target.shape[0], kl.item()/target.shape[0], mmd.item()/target.shape[0]

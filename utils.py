@@ -1,9 +1,16 @@
-import torch
 import time
-import numpy as np
-from tqdm import tqdm_notebook as tqdm
+
 import matplotlib.pyplot as plt
+import numpy as np
+import torch
 import torch.nn.functional as F
+from sklearn.cluster import KMeans
+from sklearn.externals import joblib
+from torchvision import transforms
+from tqdm import tqdm_notebook as tqdm
+
+from movingmnistdataset import MovingMNISTDataset
+
 
 def train(model, data_loader, optimizer, device, epoch=0, is_255=True, is_mnist=True):
     curr_loss = []
@@ -255,4 +262,21 @@ def test(model, data_loader, optimizer, device, is_255=True, is_mnist=True, pixe
         ax = plt.subplot(1,2+is_255,2)
         ax.imshow(data(reconstruction.contiguous().view(-1, imsize)))
     plt.show()
-    return 
+    return
+
+
+def save_kmeans_file(n_clusters):
+    transform = transforms.Compose([
+        transforms.ToPILImage(),
+        transforms.Resize(32),
+        transforms.ToTensor(),
+    ])
+
+    train_dataset = MovingMNISTDataset(train=True, folder="data", transform=transform)
+
+    numpy_train_data = train_dataset.X
+    random_indices = np.random.choice(len(numpy_train_data), 3000, replace=False)
+    numpy_train_data = numpy_train_data[random_indices].reshape(-1, 1)/255
+    kmeans = KMeans(n_clusters=n_clusters, n_jobs=-1).fit(numpy_train_data)
+    joblib.dump(kmeans, "data/kmeans_{:}.model".format(n_clusters))
+    return
