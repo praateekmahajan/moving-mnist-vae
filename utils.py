@@ -272,9 +272,8 @@ def save_kmeans_file(n_clusters):
     random_indices = np.random.choice(len(numpy_train_data), 3000, replace=False)
     numpy_sub_train_data = numpy_train_data[random_indices].reshape(-1, 1)/255
 
-    print("Fitting model on ", numpy_train_data.shape, type(numpy_train_data), numpy_train_data.min(), numpy_train_data.max())
     kmeans = KMeans(n_clusters=n_clusters, n_jobs=-1).fit(numpy_sub_train_data)
-    #
+
     mean_list = []
     std_list = []
     for i in range(3):
@@ -286,7 +285,7 @@ def save_kmeans_file(n_clusters):
     mean_list_avg = round(np.asarray(mean_list).mean(),4)
     std_list_avg = round(np.asarray(std_list).mean(),4)
 
-    kmeans_dict = {"kmeans" : kmeans, "data_mean":mean_list, "data_std":std_list}
+    kmeans_dict = {"kmeans" : kmeans, "data_mean":mean_list_avg, "data_std":std_list_avg}
     joblib.dump(kmeans_dict, "data/kmeans_{:}.model".format(n_clusters))
 
-    return kmeans.cluster_centers_, mean_list, std_list
+    return kmeans.cluster_centers_, mean_list_avg, std_list_avg
