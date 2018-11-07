@@ -138,7 +138,7 @@ class PixelCNN(nn.Module):
 class VAE(nn.Module):
     def __init__(self, in_channels, intermediate_channels, out_channels, z_dimension=32, pixelcnn=True, \
                  pixelcnn_layers=4, pixelcnn_activation="ReLu", nll=1, kl=1, mmd=0, \
-                 require_rsample=True, sigma_decoder=0.1, training=True, input_image_size=64):
+                 require_rsample=True, sigma_decoder=0.1, input_image_size=64):
         '''
 
         Args:
@@ -166,6 +166,7 @@ class VAE(nn.Module):
 
         self.nll, self.kl, self.mmd = nll, kl, mmd
         self.sigma_decoder = sigma_decoder
+        self.input_image_size = input_image_size
 
         if pixelcnn:
             decoder_output = in_channels
@@ -184,7 +185,6 @@ class VAE(nn.Module):
         mu, logvar = self.encoder(x)
 
         if self.require_rsample:
-#             print("I am going to rsample from mu and logvar")
             encoding = self.encoder.rsample(mu, logvar)
         else:
             encoding = mu
