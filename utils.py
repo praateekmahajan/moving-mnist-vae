@@ -288,7 +288,6 @@ def save_kmeans_file(n_clusters):
     joblib.dump(kmeans_dict, "data/kmeans_{:}.model".format(n_clusters))
 
     return kmeans.cluster_centers_, mean_list_avg, std_list_avg
-
 def isFloat(s):
     try:
         float(s)
