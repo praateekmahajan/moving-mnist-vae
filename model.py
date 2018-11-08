@@ -115,8 +115,6 @@ class PixelCNN(nn.Module):
                 self.layers.append(MaskedConv2d('A', in_channels, intermediate_channels, 7, 1, 3, bias=False))
             elif i == layers - 1:
                 self.layers.append(MaskedConv2d('B', intermediate_channels, out_channels, 7, 1, 3, bias=False))
-                # Remove this
-                self.layers.append(nn.Conv2d(out_channels, out_channels, 1))
             else:
                 self.layers.append(MaskedConv2d('B', intermediate_channels, intermediate_channels, 7, 1, 3, bias=False))
         self.layers = nn.ModuleList(self.layers)
@@ -129,7 +127,7 @@ class PixelCNN(nn.Module):
         x = self.bn1(x)
         for i in range(len(self.layers) - 1):
             x = self.layers[i](x)
-            x = self.bn[i](x)
+            x = self.bn(x)
             x = self.lu(x)
         x = self.layers[i + 1](x)
         return x
