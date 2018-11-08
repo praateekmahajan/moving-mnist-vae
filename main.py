@@ -5,10 +5,11 @@ import time
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from tqdm import tqdm
+import torch.nn.functional as F
 from sklearn.externals import joblib
 from torch import optim
 from torchvision import transforms
+from tqdm import tqdm
 
 from model import VAE
 from movingmnistdataset import MovingMNISTDataset
@@ -72,7 +73,7 @@ def select_model(args):
     model_params['pixelcnn_activation'] = args.pixelcnn_activation
 
     if model_params['use_pixelcnn']:
-        model_params['out_channels'] = args.quantization
+        model_params['out_channels'] = int(args.quantization)
     else:
         model_params['out_channels'] = 1
 
@@ -96,6 +97,162 @@ def create_directory(args):
         os.makedirs(directory)
     return directory
 
+
+def data(x):
+    return x.detach().cpu().numpy()
+
+
+def scatter_plot(encoding, directory, epoch, plot_count):
+    X = data(encoding[:, 0, 0, 0])
+    Y = data(encoding[:, 1, 0, 0])
+    randn = np.random.randn(X.shape[0], 2)
+    x_lim = np.absolute([X.min(), X.max()]).max() + 4
+    y_lim = np.absolute([Y.min(), Y.max()]).max() + 4
+
+    fig = plt.figure(figsize=(6, 3))
+    plt.suptitle("Plotting p(z) and q(z/x)")
+
+    ax = plt.subplot(1, 2, 1)
+    ax.set_title("p(z)")
+    plt.xlim(-x_lim, x_lim)
+    plt.ylim(-y_lim, y_lim)
+    plt.scatter(randn[:, 0], randn[:, 1], alpha=0.1)
+
+    ax = plt.subplot(1, 2, 2)
+    ax.set_title("q(z/x)")
+    plt.xlim(-x_lim, x_lim)
+    plt.ylim(-y_lim, y_lim)
+    plt.scatter(X, Y, alpha=0.1)
+    fig.savefig(directory + "/scatter-" + str(epoch) + "-" + str(plot_count))
+
+
+def generate(z_image, sample, model, data_mean, data_std):
+    for i in range(model.input_image_size):
+        for j in range(model.input_image_size):
+            concat = torch.cat([z_image, sample], dim=1)
+            output_ = model.run_pixelcnn(concat)
+            probs = F.softmax(output_[:, :, i, j], dim=1)
+            sample[:, :, i, j] = (torch.multinomial(probs, 1).float() - data_mean) / data_std
+    return output_, sample
+
+
+def plot_vae(model, device, image, reconstruction, target, encoding, directory, epoch, plot_count):
+    model.eval()
+
+    ''' Plotting p(z) and q(z/x)'''
+    scatter_plot(encoding, directory, epoch, plot_count)
+
+    ''' Plotting reconstructions '''
+    fig = plt.figure(figsize=(9, 9))
+    plt.suptitle("Reconstructions using z_image (encoding)", y=1.04)
+
+    ax = plt.subplot(1, 3, 1)
+    ax.set_title("Input")
+    plt.imshow(image[:3].view(-1, model.input_image_size), cmap='gray')
+    ax.axis("off")
+
+    ax = plt.subplot(1, 3, 2)
+    ax.set_title("Reconstruction")
+    plt.imshow(reconstruction[:3].contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+    ax.axis("off")
+
+    ax = plt.subplot(1, 3, 3)
+    ax.set_title("Target")
+    plt.imshow(target[:3].contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+    ax.axis("off")
+    fig.savefig(directory + "/recon-" + str(epoch) + "-" + str(plot_count))
+
+    ''' Sampling from z'''
+    fig = plt.figure(figsize=(3, 9))
+    fig.suptitle("Sampling from Normal(0,1) Z")
+    random_encoding = torch.randn(encoding[:3].shape).to(device)
+    output_random_encoding = model.get_reconstruction(random_encoding)
+    plt.imshow(output_random_encoding.contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+    fig.savefig(directory + "/normal_sampling-" + str(epoch) + "-" + str(plot_count))
+
+
+def plot_pixelvae(model, device, image, reconstruction, target, encoding, directory, epoch, plot_count, data_mean,
+                  data_std):
+    model.eval()
+
+    z_image = model.get_z_image(encoding[:3])
+    sample = torch.zeros(z_image.shape).to(device)
+    argmax_from_no_teacher_forcing, sample_from_no_teacher_forcing = generate(z_image, sample, model, data_mean, data_std)
+
+    random_encoding = torch.randn(encoding[:3].shape).to(device)
+    random_z_image = model.get_z_image(random_encoding)
+    argmax_z_from_no_teacher_forcing, sample_z_from_no_teacher_forcing = generate(random_z_image, sample, model, data_mean,
+                                                                                  data_std)
+    z_encoding_image_concat = torch.cat([random_z_image, image[:3]], dim=1)
+
+    ''' Plotting p(z) and q(z/x) '''
+    scatter_plot(encoding, directory, epoch, plot_count)
+
+    ''' Plotting reconstruction from z_image '''
+    fig = plt.figure(figsize=(15, 9))
+    plt.suptitle("Reconstructions using z_image (encoding)", y=1.04)
+
+    ax = plt.subplot(1, 5, 1)
+    ax.set_title("Input")
+    plt.imshow(image[:3].view(-1, model.input_image_size), cmap='gray')
+    ax.axis("off")
+
+    ax = plt.subplot(1, 5, 2)
+    ax.set_title("real z_image")
+    plt.imshow(z_image.contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+    ax.axis("off")
+
+    ax = plt.subplot(1, 5, 3)
+    ax.set_title("Recon w tf (max)")
+    plt.imshow(reconstruction[:3].argmax(dim=1).contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+    ax.axis("off")
+
+    ax = plt.subplot(1, 5, 4)
+    ax.set_title("Recon w/o tf (max)")
+    plt.imshow(argmax_from_no_teacher_forcing.argmax(dim=1).view(-1, model.input_image_size).detach(), cmap='gray')
+    ax.axis("off")
+
+    ax = plt.subplot(1, 5, 5)
+    ax.set_title("Recon w/o tf (sample)")
+    plt.imshow(sample_from_no_teacher_forcing.view(-1, model.input_image_size).detach(), cmap='gray')
+    ax.axis("off")
+    fig.savefig(directory + "/recon_z_-" + str(epoch) + "-" + str(plot_count))
+
+    ''' Plotting reconstructions from normal distribution'''
+    fig = plt.figure(figsize=(15, 9))
+    plt.suptitle("Reconstructions sampling from Normal", y=1.04)
+
+    ax = plt.subplot(1, 5, 1)
+    ax.set_title("Input")
+    plt.imshow(image[:3].view(-1, model.input_image_size), cmap='gray')
+    ax.axis("off")
+
+    ax = plt.subplot(1, 5, 2)
+    ax.set_title("rand z_image")
+    plt.imshow(random_z_image.contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+    ax.axis("off")
+
+    ax = plt.subplot(1, 5, 3)
+    ax.set_title("Recon w tf")
+    plt.imshow(model.run_pixelcnn(z_encoding_image_concat).argmax(dim=1).contiguous().view(-1,
+                                                                                           model.input_image_size).detach(),
+               cmap='gray')
+    ax.axis("off")
+
+    ax = plt.subplot(1, 5, 4)
+    ax.set_title("Recon w/o tf (max)")
+    plt.imshow(argmax_z_from_no_teacher_forcing.argmax(dim=1).view(-1, model.input_image_size).detach(), cmap='gray')
+    ax.axis("off")
+
+    ax = plt.subplot(1, 5, 5)
+    ax.set_title("Recon w/o tf (sample)")
+    plt.imshow(sample_z_from_no_teacher_forcing.view(-1, model.input_image_size).detach(), cmap='gray')
+    ax.axis("off")
+    fig.savefig(directory + "/normal-recon-" + str(epoch) + "-" + str(plot_count))
+
+    return
+
+
 def train(model, data_loader, optimizer, device, epoch=0, data_mean=0, data_std=1, plot_every=200, directory="output/"):
     curr_loss = []
     px_given_z = []
@@ -113,7 +270,7 @@ def train(model, data_loader, optimizer, device, epoch=0, data_mean=0, data_std=
         # Therefore input could be from [-ve to +ve] but target should be [0, k]
 
         if model.pixelcnn is not None:
-            target = image.view(-1, model.input_image_size, model.input_image_size).to(device)
+            target = image.view(-1, model.input_image_size, model.input_image_size).to(device).long()
             image = (
                 (image.float().view(-1, 1, model.input_image_size, model.input_image_size) - data_mean) / (data_std))
         else:
@@ -122,6 +279,16 @@ def train(model, data_loader, optimizer, device, epoch=0, data_mean=0, data_std=
             target = image
         mu, logvar, encoding, reconstruction = model(image)
         loss, pxz_loss, kl_loss, mmd_loss = model.loss(target, mu, logvar, encoding, reconstruction, device)
+
+        if index % plot_every == 0:
+            if model.pixelcnn is None:
+                plot_vae(model, device, image, reconstruction, target, encoding, directory, epoch, plot_count)
+            else:
+                plot_pixelvae(model, device, image, reconstruction, target, encoding, directory, epoch, plot_count,
+                              data_mean, data_std)
+
+            plot_count += 1
+
         # Loss tracking
         curr_loss.append(loss.item())
         px_given_z.append(pxz_loss)
@@ -131,35 +298,6 @@ def train(model, data_loader, optimizer, device, epoch=0, data_mean=0, data_std=
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-
-        if index % plot_every == 0:
-            model.eval()
-            fig = plt.figure(figsize=(9, 9))
-
-            ax = plt.subplot(1, 3, 1)
-            ax.set_title("Input")
-            plt.imshow(image[:3].view(-1, model.input_image_size), cmap='gray')
-            ax.axis("off")
-
-            ax = plt.subplot(1, 3, 2)
-            ax.set_title("Reconstruction")
-            plt.imshow(reconstruction[:3].contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
-            ax.axis("off")
-
-            ax = plt.subplot(1, 3, 3)
-            ax.set_title("Target")
-            plt.imshow(target[:3].contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
-            ax.axis("off")
-            fig.savefig(directory +"/recon-"+str(epoch)+"-"+str(plot_count))
-
-
-            fig = plt.figure(figsize=(3, 9))
-            fig.suptitle("Sampling from Normal(0,1) Z")
-            random_encoding = torch.randn(encoding[:3].shape).to(device)
-            output_random_encoding = model.get_reconstruction(random_encoding)
-            plt.imshow(output_random_encoding.contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
-            fig.savefig(directory +"/normal_sampling-"+str(epoch)+"-"+str(plot_count))
-            plot_count += 1
 
     time_tr = time.time() - time_tr
     print('Epoch={:d}; Loss={:0.5f} NLL={:.3f}; KL={:.3f}; MMD={:.3f}; time_tr={:.1f}s;'.format(
@@ -175,7 +313,19 @@ def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() and args.gpu else "cpu")
 
     '''
-    First let's prepare data loading
+    First let's prepare the models.
+    This is the first step so that we can check parameters and do assertions
+    '''
+
+    # TODO : Add abilitiy for more than Adam optimizer
+
+    model = select_model(args).to(device)
+    optimizer = optim.Adam(list(model.parameters()))
+
+    print(args.model + " has been loaded")
+
+    '''
+    Next let's prepare data loading
     '''
     # First get kmeans to quantise
     kmeans_dict = joblib.load(args.data_dir + "/kmeans_" + str(args.quantization) + ".model")
@@ -201,13 +351,8 @@ def main(args):
     )
 
     '''
-    Next let's get correct model, optimizer and correct configuration
+        Start Training
     '''
-    # TODO : Add abilitiy for more than Adam optimizer
-
-    model = select_model(args).to(device)
-    optimizer = optim.Adam(list(model.parameters()))
-
     plot_every = len(training_dataset.X) / (args.train_batch_size * int(args.plot_interval))
     directory = create_directory(args)
 
@@ -218,7 +363,9 @@ def main(args):
     joblib.dump(args, directory + "/args.dump")
     for epoch in range(args.epochs):
         joblib.dump(epoch, directory + "/latest_epoch.dump")
-        current_loss, current_px_given_z, current_kl, current_mmd = train(model, train_loader, optimizer, device, epoch, data_mean, data_std, plot_every=plot_every, directory=directory)
+        current_loss, current_px_given_z, current_kl, current_mmd = train(model, train_loader, optimizer, device, epoch,
+                                                                          data_mean, data_std, plot_every=plot_every,
+                                                                          directory=directory)
         total_loss.extend(current_loss)
         total_px_given_z.extend(current_px_given_z)
         total_kl.extend(current_kl)
@@ -227,7 +374,7 @@ def main(args):
         torch.save({
             'epoch': epoch + 1,
             'state_dict': model.state_dict(),
-            'optimizer' : optimizer.state_dict(),
+            'optimizer': optimizer.state_dict(),
         }, directory + "/latest-model.model")
 
 

@@ -127,7 +127,7 @@ class PixelCNN(nn.Module):
         x = self.bn1(x)
         for i in range(len(self.layers) - 1):
             x = self.layers[i](x)
-            x = self.bn(x)
+            x = self.bn[i](x)
             x = self.lu(x)
         x = self.layers[i + 1](x)
         return x
@@ -207,16 +207,16 @@ class VAE(nn.Module):
         if self.adjust != 0:
             decoder_output = decoder_output[:,:,self.adjust:-self.adjust,self.adjust:-self.adjust]
         return decoder_output
-    
+
+    def run_pixelcnn(self, concat):
+        return self.pixelcnn(concat)
+
     def get_reconstruction(self, encoding, sample=None):
         decoder_output = self.decoder(encoding)
         if self.adjust != 0:
             decoder_output = decoder_output[:,:,self.adjust:-self.adjust,self.adjust:-self.adjust]
         if self.pixelcnn is not None:
-            if self.training:
-                concat = torch.cat([decoder_output, x], dim=1)
-            else:
-                concat = torch.cat([decoder_output, sample], dim=1)
+            concat = torch.cat([decoder_output, sample], dim=1)
             reconstruction = self.pixelcnn(concat)
         else:
             reconstruction = decoder_output
