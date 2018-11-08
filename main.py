@@ -92,7 +92,7 @@ def show_data(x, imsize):
 def create_directory(args):
     today = time.strftime('%m-%d-%Y %H')
     directory = "output/" + today + "/" + args.model
-    if not os.path.exists("output"):
+    if not os.path.exists(directory):
         os.makedirs(directory)
     return directory
 
