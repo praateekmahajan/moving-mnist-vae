@@ -114,7 +114,7 @@ def show_data(x, imsize):
 
 def create_directory(args):
     today = time.strftime('%m-%d-%Y_%H')
-    directory = args.output_dir + "/" + today + "/" + args.model
+    directory = args.output_dir + "/" + today + "/" + args.model + "_" + args.folder_suffix
     if not os.path.exists(directory):
         os.makedirs(directory)
     return directory
@@ -210,12 +210,12 @@ def plot_pixelcnn(model, device, image, reconstruction, directory, epoch, plot_c
 
     ax = plt.subplot(1, 2, 2)
     ax.set_title("Reconstruction")
-    plt.imshow(reconstruction.argmax(dim=1).contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+    plt.imshow(reconstruction[:3].argmax(dim=1).contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
     ax.axis("off")
     fig.savefig(directory + "/recon-" + str(epoch) + "-" + str(plot_count))
 
     ''' Sampling from z'''
-    sample = torch.zeros(image[:10].shape).to(device)
+    sample = torch.zeros(image[:10].shape).to(device) - data_mean/data_std
     argmax_from_sampling, sample_from_sampling = generate_only_pixelcnn(sample, model, data_mean,
                                                                         data_std)
 
@@ -455,7 +455,7 @@ if __name__ == '__main__':
     # Argument for model name
     parser.add_argument("model", help="one of vae_with_no_kl_no_mmd}")
     parser.add_argument("--dataset", help="one of MNIST, MovingMNIST}", default="MovingMNIST")
-
+    parser.add_argument("--folder_suffix", help="suffix to folder", default="")
     # Argument for systems requirement
     add_bool_arg(parser, 'gpu', default=True)
     parser.add_argument('--gpu_id', help='GPU id, check with nvidia-smi', type=str, default="0")

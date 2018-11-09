@@ -28,8 +28,6 @@ class VAE_Encoder(nn.Module):
                                bias=False)
         self.conv4 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=2, padding=1,
                                bias=False)
-        self.conv4 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=2, padding=1,
-                               bias=False)
         self.conv5 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=2, padding=1,
                                bias=False)
 
@@ -53,7 +51,7 @@ class VAE_Encoder(nn.Module):
         x = F.relu(self.bn2(self.conv2(x)))
         x = F.relu(self.bn3(self.conv3(x)))
         x = F.relu(self.bn4(self.conv4(x)))
-        x = F.relu(self.bn5(self.conv4(x)))
+        x = F.relu(self.bn5(self.conv5(x)))
 
         mu = self.conv_mu(x)
         logvar = None
