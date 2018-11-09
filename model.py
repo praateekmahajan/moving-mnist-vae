@@ -75,7 +75,8 @@ class VAE_Decoder(nn.Module):
                                bias=True)
         self.conv3 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=1, padding=1,
                                bias=True)
-        self.conv4 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=1, padding=1, bias=True)
+        self.conv4 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=1, padding=1,
+                               bias=True)
         self.conv5 = nn.Conv2d(intermediate_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=True)
 
     def forward(self, x):
@@ -134,8 +135,8 @@ class PixelCNN(nn.Module):
 
 
 class VAE(nn.Module):
-    def __init__(self, in_channels, intermediate_channels, out_channels, z_dimension=32, pixelcnn=True, \
-                 pixelcnn_layers=4, pixelcnn_activation="ReLu", nll=1, kl=1, mmd=0, \
+    def __init__(self, in_channels, intermediate_channels, out_channels, z_dimension=32, pixelcnn=True,
+                 only_pixelcnn=True, pixelcnn_layers=4, pixelcnn_activation="ReLu", nll=1, kl=1, mmd=0,
                  require_rsample=True, sigma_decoder=0.1, input_image_size=64):
         '''
 
@@ -154,58 +155,57 @@ class VAE(nn.Module):
         super(VAE, self).__init__()
         self.require_rsample = require_rsample
 
-
-        # require rsample and mmd can't be true at the same time
-        # assert((not require_rsample and mmd)
-        # assert (self.need_logvar and self.require_rsample), "For KL we require rsample to be true"
-        # assert not (mmd == 0 and self.require_rsample), "For MMD we require rsample to be false"
-        # assert (
-        # pixelcnn and sigma_decoder == 0), "You can't sample from Normal Distribution from decoder when pixelcnn exists"
-
         self.nll, self.kl, self.mmd = nll, kl, mmd
         self.sigma_decoder = sigma_decoder
         self.input_image_size = input_image_size
+        self.only_pixelcnn = only_pixelcnn
+        if not only_pixelcnn:
+            if pixelcnn:
+                decoder_output = in_channels
+                self.pixelcnn = PixelCNN(2 * decoder_output, intermediate_channels, out_channels, pixelcnn_layers, \
+                                         pixelcnn_activation)
 
-        if pixelcnn:
-            decoder_output = in_channels
-            self.pixelcnn = PixelCNN(2 * decoder_output, intermediate_channels, out_channels, pixelcnn_layers, \
+            else:
+                decoder_output = out_channels
+                self.pixelcnn = None
+
+            self.encoder = VAE_Encoder(in_channels, intermediate_channels, z_dimension, require_rsample)
+            self.decoder = VAE_Decoder(z_dimension, intermediate_channels, decoder_output)
+            self.adjust = (64 - input_image_size) // 2
+
+        else:
+            self.pixelcnn = PixelCNN(in_channels, intermediate_channels, out_channels, pixelcnn_layers, \
                                      pixelcnn_activation)
 
-        else:
-            decoder_output = out_channels
-            self.pixelcnn = None
-
-        self.encoder = VAE_Encoder(in_channels, intermediate_channels, z_dimension, require_rsample)
-        self.decoder = VAE_Decoder(z_dimension, intermediate_channels, decoder_output)
-        self.adjust = (64 - input_image_size)//2
-
     def forward(self, x, sample=None):
-        mu, logvar = self.encoder(x)
+        mu, logvar, encoding, reconstruction = None, None, None, None
+        if not self.only_pixelcnn:
+            mu, logvar = self.encoder(x)
 
-        if self.require_rsample:
-            encoding = self.encoder.rsample(mu, logvar)
-        else:
-            encoding = mu
-        
-        decoder_output = self.decoder(encoding)
-        if self.adjust != 0:
-            decoder_output = decoder_output[:,:,self.adjust:-self.adjust,self.adjust:-self.adjust]
-        if self.pixelcnn is not None:
-            if self.training:
-                concat = torch.cat([decoder_output, x], dim=1)
+            if self.require_rsample:
+                encoding = self.encoder.rsample(mu, logvar)
             else:
-                concat = torch.cat([decoder_output, sample], dim=1)
-            reconstruction = self.pixelcnn(concat)
-        else:
-            reconstruction = decoder_output
+                encoding = mu
 
+            decoder_output = self.decoder(encoding)
+            if self.adjust != 0:
+                decoder_output = decoder_output[:, :, self.adjust:-self.adjust, self.adjust:-self.adjust]
+            if self.pixelcnn is not None:
+                if self.training:
+                    concat = torch.cat([decoder_output, x], dim=1)
+                else:
+                    concat = torch.cat([decoder_output, sample], dim=1)
+                reconstruction = self.pixelcnn(concat)
+            else:
+                reconstruction = decoder_output
+        else:
+            reconstruction = self.pixelcnn(x)
         return mu, logvar, encoding, reconstruction
 
-    
     def get_z_image(self, encoding):
         decoder_output = self.decoder(encoding)
         if self.adjust != 0:
-            decoder_output = decoder_output[:,:,self.adjust:-self.adjust,self.adjust:-self.adjust]
+            decoder_output = decoder_output[:, :, self.adjust:-self.adjust, self.adjust:-self.adjust]
         return decoder_output
 
     def run_pixelcnn(self, concat):
@@ -214,14 +214,14 @@ class VAE(nn.Module):
     def get_reconstruction(self, encoding, sample=None):
         decoder_output = self.decoder(encoding)
         if self.adjust != 0:
-            decoder_output = decoder_output[:,:,self.adjust:-self.adjust,self.adjust:-self.adjust]
+            decoder_output = decoder_output[:, :, self.adjust:-self.adjust, self.adjust:-self.adjust]
         if self.pixelcnn is not None:
             concat = torch.cat([decoder_output, sample], dim=1)
             reconstruction = self.pixelcnn(concat)
         else:
             reconstruction = decoder_output
         return reconstruction
-    
+
     def kl_divergence(self, encoding_mu, encoding_logvar):
         return -0.5 * torch.sum(encoding_logvar - (encoding_logvar).exp() - encoding_mu.pow(2) + 1)
 
@@ -247,17 +247,20 @@ class VAE(nn.Module):
         kl = torch.tensor(0.).to(device)
         mmd = torch.tensor(0.).to(device)
 
+        # In case of requrie rsample to be False, encoding_logvar would be None
         if encoding_mu is not None and encoding_logvar is not None:
             kl = self.kl_divergence(encoding_mu, encoding_logvar)
 
-        true_samples = torch.randn(target.shape[0], encoding.shape[1]).to(device)
-        mmd = self.compute_mmd(true_samples, encoding.view(-1, encoding.shape[1]))
-        
+        # In case of only pixelcnn architecture the encoding would be none
+        if encoding is not None:
+            true_samples = torch.randn(target.shape[0], encoding.shape[1]).to(device)
+            mmd = self.compute_mmd(true_samples, encoding.view(-1, encoding.shape[1]))
+
         if self.pixelcnn is not None:
             px_given_z = self.nll * F.cross_entropy(reconstruction, target, reduction='none').sum()
         else:
             px_given_z = - self.nll * Normal(reconstruction, self.sigma_decoder).log_prob(target).sum()
 
-        loss = (px_given_z + (self.kl * kl) + (self.mmd * mmd))/target.shape[0]
+        loss = (px_given_z + (self.kl * kl) + (self.mmd * mmd)) / target.shape[0]
 
-        return loss, px_given_z.item()/target.shape[0], kl.item()/target.shape[0], mmd.item()/target.shape[0]
+        return loss, px_given_z.item() / target.shape[0], kl.item() / target.shape[0], mmd.item() / target.shape[0]
