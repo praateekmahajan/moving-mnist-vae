@@ -210,7 +210,7 @@ def plot_pixelcnn(model, device, image, reconstruction, directory, epoch, plot_c
 
     ax = plt.subplot(1, 2, 2)
     ax.set_title("Reconstruction")
-    plt.imshow(reconstruction[:3].contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+    plt.imshow(reconstruction.argmax(dim=1).contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
     ax.axis("off")
     fig.savefig(directory + "/recon-" + str(epoch) + "-" + str(plot_count))
 
