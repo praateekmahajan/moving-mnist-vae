@@ -68,20 +68,20 @@ class VAE_Encoder(nn.Module):
 class VAE_Decoder(nn.Module):
     def __init__(self, in_channels, intermediate_channels, out_channels):
         super(VAE_Decoder, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, intermediate_channels, kernel_size=3, stride=1, padding=1, bias=True)
+        self.conv1 = nn.Conv2d(in_channels, intermediate_channels, kernel_size=3, stride=1, padding=1, bias=False)
         self.conv2 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=1, padding=1,
-                               bias=True)
+                               bias=False)
         self.conv3 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=1, padding=1,
-                               bias=True)
+                               bias=False)
         self.conv4 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=1, padding=1,
-                               bias=True)
-        self.conv5 = nn.Conv2d(intermediate_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=True)
+                               bias=False)
+        self.conv5 = nn.Conv2d(intermediate_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
 
     def forward(self, x):
-        x = F.elu(self.conv1(F.interpolate(x, scale_factor=2)))
-        x = F.elu(self.conv2(F.interpolate(x, scale_factor=4)))
-        x = F.elu(self.conv3(F.interpolate(x, scale_factor=2)))
-        x = F.elu(self.conv4(F.interpolate(x, scale_factor=2)))
+        x = F.relu(self.conv1(F.interpolate(x, scale_factor=2)))
+        x = F.relu(self.conv2(F.interpolate(x, scale_factor=4)))
+        x = F.relu(self.conv3(F.interpolate(x, scale_factor=2)))
+        x = F.relu(self.conv4(F.interpolate(x, scale_factor=2)))
         x = self.conv5(F.interpolate(x, scale_factor=2))
         return x
 
@@ -104,18 +104,18 @@ class MaskedConv2d(nn.Conv2d):
 class PixelCNN(nn.Module):
     def __init__(self, in_channels, intermediate_channels, out_channels, layers=4, activation="ReLu"):
         super(PixelCNN, self).__init__()
-        self.bn = nn.ModuleList([nn.BatchNorm2d(intermediate_channels)] * (layers - 1))
-        self.bn.append(nn.BatchNorm2d(out_channels))
-        self.bn1 = nn.BatchNorm2d(in_channels)
+        self.bn = nn.ModuleList([nn.InstanceNorm2d(intermediate_channels)] * (layers - 1))
+        self.bn.append(nn.InstanceNorm2d(out_channels))
+        self.bn1 = nn.InstanceNorm2d(in_channels)
 
         self.layers = []
         for i in range(layers):
             if i == 0:
-                self.layers.append(MaskedConv2d('A', in_channels, intermediate_channels, 7, 1, 3, bias=False))
+                self.layers.append(MaskedConv2d('A', in_channels, intermediate_channels, 7, 1, 3, bias=True))
             elif i == layers - 1:
-                self.layers.append(MaskedConv2d('B', intermediate_channels, out_channels, 7, 1, 3, bias=False))
+                self.layers.append(MaskedConv2d('B', intermediate_channels, out_channels, 7, 1, 3, bias=True))
             else:
-                self.layers.append(MaskedConv2d('B', intermediate_channels, intermediate_channels, 7, 1, 3, bias=False))
+                self.layers.append(MaskedConv2d('B', intermediate_channels, intermediate_channels, 7, 1, 3, bias=True))
         self.layers = nn.ModuleList(self.layers)
         if activation == "ReLu":
             self.lu = nn.ReLU()
