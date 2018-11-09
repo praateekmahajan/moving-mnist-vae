@@ -58,7 +58,7 @@ def select_model(args):
         assert (isInt(splits[1])), "The number of layers has to be an int"
         only_pixelcnn = True
         use_pixelcnn = True
-        args.num_pixelcnn_layers = splits[1]
+        args.num_pixelcnn_layers = int(splits[1])
         model_params = {'only_pixelcnn': only_pixelcnn, 'use_pixelcnn': use_pixelcnn, "coeff_kl": 0., "coeff_mmd": 0.}
 
     # It is either pixelvae or vae
