@@ -212,9 +212,10 @@ def plot_pixelcnn(model, device, image, reconstruction, directory, epoch, plot_c
     ax.set_title("Reconstruction")
     plt.imshow(reconstruction[:3].contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
     ax.axis("off")
+    fig.savefig(directory + "/recon-" + str(epoch) + "-" + str(plot_count))
 
     ''' Sampling from z'''
-    sample = torch.zeros(image[:3].shape).to(device)
+    sample = torch.zeros(image[:10].shape).to(device)
     argmax_from_sampling, sample_from_sampling = generate_only_pixelcnn(sample, model, data_mean,
                                                                         data_std)
 
