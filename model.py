@@ -19,25 +19,40 @@ def kl_divergence(encoding_mu, encoding_logvar):
 
 
 class VAE_Encoder(nn.Module):
-    def __init__(self, in_channels, intermediate_channels, z_dimensions, need_logvar=True):
+    def __init__(self, in_channels, intermediate_channels, z_dimensions, need_logvar=True, input_image_size=32):
         super(VAE_Encoder, self).__init__()
+        self.input_image_size = input_image_size
         self.conv1 = nn.Conv2d(in_channels, intermediate_channels, kernel_size=5, stride=2, padding=2, bias=False)
-        self.conv2 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=5, stride=2, padding=2,
+        self.conv2 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=1, padding=1,
                                bias=False)
         self.conv3 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=2, padding=1,
                                bias=False)
-        self.conv4 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=2, padding=1,
+        self.conv4 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=1, padding=1,
                                bias=False)
         self.conv5 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=2, padding=1,
                                bias=False)
+        self.conv6 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=1, padding=1,
+                               bias=False)
 
-        self.conv_mu = nn.Conv2d(intermediate_channels, z_dimensions, kernel_size=3, stride=2, padding=1, bias=False)
-
+        self.conv7 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=2, padding=1,
+                               bias=False)
         self.bn1 = nn.BatchNorm2d(intermediate_channels)
         self.bn2 = nn.BatchNorm2d(intermediate_channels)
         self.bn3 = nn.BatchNorm2d(intermediate_channels)
         self.bn4 = nn.BatchNorm2d(intermediate_channels)
         self.bn5 = nn.BatchNorm2d(intermediate_channels)
+        self.bn6 = nn.BatchNorm2d(intermediate_channels)
+        self.bn7 = nn.BatchNorm2d(intermediate_channels)
+
+        if input_image_size > 32:
+            self.conv8 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=1, padding=1,
+                                   bias=False)
+            self.bn8 = nn.BatchNorm2d(intermediate_channels)
+            self.conv9 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=2, padding=1,
+                                   bias=False)
+            self.bn9 = nn.BatchNorm2d(intermediate_channels)
+
+        self.conv_mu = nn.Conv2d(intermediate_channels, z_dimensions, kernel_size=3, stride=2, padding=1, bias=False)
 
         if need_logvar == True:
             self.conv_logvar = nn.Conv2d(intermediate_channels, z_dimensions, kernel_size=3, stride=2, padding=1,
@@ -47,16 +62,35 @@ class VAE_Encoder(nn.Module):
             # N x Z x 2 x 2
 
     def forward(self, x):
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.relu(self.bn3(self.conv3(x)))
-        x = F.relu(self.bn4(self.conv4(x)))
-        x = F.relu(self.bn5(self.conv5(x)))
+        print("Input image", x.shape)
+        '''Block'''
+        x_1 = F.relu(self.bn1(self.conv1(x)))  # Stride, 32/2
+        x_2 = F.relu(self.bn2(self.conv2(x_1)))  # No stride
 
-        mu = self.conv_mu(x)
+        '''Block'''
+        x_3 = F.relu(self.bn3(self.conv3(x_1 + x_2)))  # Stride 32/4 = 8, 64/4
+        x_4 = F.relu(self.bn4(self.conv4(x_3)))  # No Stride
+
+
+        '''Block'''
+        x_5 = F.relu(self.bn5(self.conv5(x_4 + x_3)))  # Stride 32/8 = 4, 64/8
+        x_6 = F.relu(self.bn6(self.conv6(x_5)))  # no stride
+
+        '''Block'''
+        x_7 = F.relu(self.bn7(self.conv7(x_6 + x_5)))  # stride  32/16 = 2, 64/16 = 4
+        if self.input_image_size > 32:
+            x_8 = F.relu(self.bn8(self.conv8(x_7)))  # Conv7 has no stride
+            '''Add'''
+            x_9 = F.relu(self.bn9(self.conv9(x_8 + x_7)))  # Conv8 has stride  64/32
+            final = x_9
+
+        else:
+            final = x_7
+
+        mu = self.conv_mu(final)  # 32/64
         logvar = None
         if self.conv_logvar is not None:
-            logvar = self.conv_logvar(x)
+            logvar = self.conv_logvar(final)
 
         return mu, logvar
 
@@ -66,8 +100,10 @@ class VAE_Encoder(nn.Module):
 
 
 class VAE_Decoder(nn.Module):
-    def __init__(self, in_channels, intermediate_channels, out_channels):
+    def __init__(self, in_channels, intermediate_channels, out_channels, input_image_size=32):
         super(VAE_Decoder, self).__init__()
+        self.input_image_size = input_image_size
+
         self.conv1 = nn.Conv2d(in_channels, intermediate_channels, kernel_size=3, stride=1, padding=1, bias=False)
         self.conv2 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=1, padding=1,
                                bias=False)
@@ -75,14 +111,19 @@ class VAE_Decoder(nn.Module):
                                bias=False)
         self.conv4 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=1, padding=1,
                                bias=False)
-        self.conv5 = nn.Conv2d(intermediate_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
+        if input_image_size > 32:
+            self.conv5 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=1, padding=1,
+                                   bias=False)
+        self.conv6 = nn.Conv2d(intermediate_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
 
     def forward(self, x):
-        x = F.relu(self.conv1(F.interpolate(x, scale_factor=2)))
-        x = F.relu(self.conv2(F.interpolate(x, scale_factor=4)))
-        x = F.relu(self.conv3(F.interpolate(x, scale_factor=2)))
-        x = F.relu(self.conv4(F.interpolate(x, scale_factor=2)))
-        x = self.conv5(F.interpolate(x, scale_factor=2))
+        x = F.relu(self.conv1(F.interpolate(x, scale_factor=2)))  # 2
+        x = F.relu(self.conv2(F.interpolate(x, scale_factor=2)))  # 4
+        x = F.relu(self.conv3(F.interpolate(x, scale_factor=2)))  # 8
+        x = F.relu(self.conv4(F.interpolate(x, scale_factor=2)))  # 16
+        if self.input_image_size > 32:
+            x = F.relu(self.conv5(F.interpolate(x, scale_factor=2)))  # 32
+        x = self.conv6(F.interpolate(x, scale_factor=2))  # 64
         return x
 
 
@@ -167,9 +208,13 @@ class VAE(nn.Module):
                 decoder_output = out_channels
                 self.pixelcnn = None
 
-            self.encoder = VAE_Encoder(in_channels, intermediate_channels, z_dimension, require_rsample)
-            self.decoder = VAE_Decoder(z_dimension, intermediate_channels, decoder_output)
-            self.adjust = (64 - input_image_size) // 2
+            self.encoder = VAE_Encoder(in_channels, intermediate_channels, z_dimension, require_rsample,
+                                       input_image_size)
+            self.decoder = VAE_Decoder(z_dimension, intermediate_channels, decoder_output, input_image_size)
+            if input_image_size > 32:
+                self.adjust = (64 - input_image_size) // 2
+            else:
+                self.adjust = (32 - input_image_size) // 2
 
         else:
             self.pixelcnn = PixelCNN(in_channels, intermediate_channels, out_channels, pixelcnn_layers, \
@@ -260,5 +305,4 @@ class VAE(nn.Module):
             px_given_z = - self.nll * Normal(reconstruction, self.sigma_decoder).log_prob(target).sum()
 
         loss = (px_given_z + (self.kl * kl) + (self.mmd * mmd)) / target.shape[0]
-
         return loss, px_given_z.item() / target.shape[0], kl.item() / target.shape[0], mmd.item() / target.shape[0]
