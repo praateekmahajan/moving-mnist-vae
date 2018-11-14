@@ -59,31 +59,44 @@ def select_model(args):
         only_pixelcnn = True
         use_pixelcnn = True
         args.num_pixelcnn_layers = int(splits[1])
-        model_params = {'only_pixelcnn': only_pixelcnn, 'use_pixelcnn': use_pixelcnn, "coeff_kl": 0., "coeff_mmd": 0.}
+        model_params = {'is_decoder_out_normal': False, 'only_pixelcnn': only_pixelcnn, 'use_pixelcnn': use_pixelcnn,
+                        "coeff_kl": 0., "coeff_mmd": 0.}
 
     # It is either pixelvae or vae
     else:
+        only_pixelcnn = False
+        # normal_vae_0_kl_0_mmd
         assert (
-            len(splits) == 6 and splits[1] == "with"), "model name should be of the format pixelvae_with_1_kl_10_mmd"
-        assert (splits[0] == "pixelvae" or splits[0] == "vae"), "model should be vae or pixelvae"
+            len(splits) == 6 and "vae" in splits[1]), "model name should be of the format normal_pixelvae_1_kl_10_mmd"
+        assert (splits[1] == "pixelvae" or splits[1] == "vae"), "model should be vae or pixelvae"
         assert (isFloat(splits[2]) and isFloat(splits[4])), "coefficients should be numeric"
-        use_pixelcnn = splits[0] == "pixelvae"
-        model_params = {'only_pixelcnn': False, 'use_pixelcnn': use_pixelcnn, "coeff_kl": float(splits[2]),
-                        "coeff_mmd": float(splits[4])}
+        use_pixelcnn = splits[1] == "pixelvae"
+        is_normal = splits[0] == "normal"
+        # If we are using normal distribution for P(x_hat/z) in decoder-output, then
+        model_params = {'is_decoder_out_normal': is_normal, 'only_pixelcnn': False, 'use_pixelcnn': use_pixelcnn,
+                        "coeff_kl": float(splits[2]), "coeff_mmd": float(splits[4])}
 
-    only_pixelcnn = False
+    # If it is PixelVAE and it is not normal then out_channels should be > in_channels
+    if use_pixelcnn and not only_pixelcnn:
+        if not model_params['is_decoder_out_normal']:
+            assert args.decoder_out_channels > args.input_channels, "decoder_out_channels should be > input_channels when categorical_pixelvae else simply use normal_pixelvae"
+    print(model_params['is_decoder_out_normal'], args.sigma_decoder == 0)
 
-    # Assertions for other parameters
-
-    assert (
-        model_params['use_pixelcnn'] == (
+    # assert (
+    #     model_params['use_pixelcnn'] == (
+    #         args.sigma_decoder == 0)), "sigma_decoder should be 0 when using vae and non-zero when using pixelvae/pixelcnn"
+    assert not (
+         model_params['is_decoder_out_normal'] == (
             args.sigma_decoder == 0)), "sigma_decoder should be 0 when using vae and non-zero when using pixelvae/pixelcnn"
-    assert (model_params['use_pixelcnn'] == (
-        args.num_pixelcnn_layers >= 2)), "num of pixelcnn layers should be greater than 2 when using pixelvae/pixelcnn"
+
+    if model_params['use_pixelcnn']:
+        assert (
+        args.num_pixelcnn_layers >= 2), "num of pixelcnn layers should be greater than 2 when using pixelvae/pixelcnn"
     if model_params['use_pixelcnn']:
         assert (model_params['use_pixelcnn'] and (
             args.pixelcnn_activation == "ReLu" or args.pixelcnn_activation == "ELU")), "Choose either Relu or ELU"
 
+    model_params['input_channels'] = args.input_channels
     model_params['input_image_size'] = args.input_image_size
     model_params['intermediate_channels'] = args.intermediate_channels
     model_params['z_dimension'] = args.z_dimension
@@ -93,18 +106,40 @@ def select_model(args):
     model_params['num_pixelcnn_layers'] = args.num_pixelcnn_layers
     model_params['pixelcnn_activation'] = args.pixelcnn_activation
 
-    if model_params['use_pixelcnn']:
-        model_params['out_channels'] = int(args.quantization)
-    else:
-        model_params['out_channels'] = 1
+    # If PixelVAE
 
-    model = VAE(in_channels=1, intermediate_channels=model_params['intermediate_channels'],
-                out_channels=model_params['out_channels'], z_dimension=model_params['z_dimension'],
+    # Could be PixelCNN or PixelVAE
+    if use_pixelcnn:
+        model_params['pixelcnn_out_channels'] = int(args.quantization)
+        # If PixelVAE
+        if not only_pixelcnn:
+            if model_params['is_decoder_out_normal']:
+                model_params['decoder_out_channels'] = args.input_channels
+            else:
+                model_params['decoder_out_channels'] = args.decoder_out_channels
+        else:
+            model_params['decoder_out_channels'] = 0
+
+    # If VAE
+    else:
+        model_params['pixelcnn_out_channels'] = 0
+        # Decoder output follows normal distribution then output channels will be same as input channels
+        if model_params['is_decoder_out_normal']:
+            model_params['decoder_out_channels'] = model_params['input_channels']
+        # Decoder output follows categoriacal distribution then output channels will be same as quantization
+        else:
+            model_params['decoder_out_channels'] = int(args.quantization)
+
+    model = VAE(in_channels=model_params['input_channels'], intermediate_channels=model_params['intermediate_channels'],
+                decoder_out_channels=model_params['decoder_out_channels'],
+                pixelcnn_out_channels=model_params['pixelcnn_out_channels'],
+                z_dimension=model_params['z_dimension'],
                 pixelcnn=model_params['use_pixelcnn'], only_pixelcnn=model_params['only_pixelcnn'],
                 pixelcnn_layers=model_params['num_pixelcnn_layers'],
                 pixelcnn_activation=model_params['pixelcnn_activation'], nll=1, kl=model_params['coeff_kl'],
                 mmd=model_params['coeff_mmd'], require_rsample=model_params['require_rsample'],
                 sigma_decoder=model_params['sigma_decoder'], input_image_size=model_params['input_image_size'])
+    print(model)
     return model
 
 
@@ -184,7 +219,11 @@ def plot_vae(model, device, image, reconstruction, encoding, directory, epoch, p
 
     ax = plt.subplot(1, 2, 2)
     ax.set_title("Reconstruction")
-    plt.imshow(reconstruction[:3].contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+    if model.decoder_out_channels > model.in_channels:
+        plt.imshow(reconstruction[:3].argmax(dim=1).contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+    else:
+        plt.imshow(reconstruction[:3].contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+
     ax.axis("off")
 
     fig.savefig(directory + "/recon-" + str(epoch) + "-" + str(plot_count))
@@ -215,7 +254,7 @@ def plot_pixelcnn(model, device, image, reconstruction, directory, epoch, plot_c
     fig.savefig(directory + "/recon-" + str(epoch) + "-" + str(plot_count))
 
     ''' Sampling from z'''
-    sample = torch.zeros(image[:10].shape).to(device) - data_mean/data_std
+    sample = torch.zeros(image[:10].shape).to(device) - data_mean / data_std
     argmax_from_sampling, sample_from_sampling = generate_only_pixelcnn(sample, model, data_mean,
                                                                         data_std)
 
@@ -328,6 +367,7 @@ def train(model, data_loader, optimizer, device, args, epoch=0, data_mean=0, dat
     plot_count = 0
     for index, image in enumerate(tqdm(data_loader, leave=False)):
         model.train(True)
+
         if args.dataset == "MNIST":
             image = image[0].to(device)
         else:
@@ -335,7 +375,7 @@ def train(model, data_loader, optimizer, device, args, epoch=0, data_mean=0, dat
         # This condition checks if there is a pixelcnn, it means that our output will be
         # k number of channels, and we'll be using cross entropy loss.
         # Therefore input could be from [-ve to +ve] but target should be [0, k]
-        if model.pixelcnn is not None:
+        if model.pixelcnn is not None or (model.pixelcnn is None and model.decoder_out_channels > model.in_channels):
             target = image.view(-1, model.input_image_size, model.input_image_size).to(device).long()
             image = (
                 (image.float().view(-1, 1, model.input_image_size, model.input_image_size) - data_mean) / (data_std))
@@ -360,6 +400,7 @@ def train(model, data_loader, optimizer, device, args, epoch=0, data_mean=0, dat
 
             plot_count += 1
 
+
         # Loss tracking
         curr_loss.append(loss.item())
         px_given_z.append(pxz_loss)
@@ -369,6 +410,7 @@ def train(model, data_loader, optimizer, device, args, epoch=0, data_mean=0, dat
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+
 
     time_tr = time.time() - time_tr
     print('Epoch={:d}; Loss={:0.5f} NLL={:.3f}; KL={:.3f}; MMD={:.3f}; time_tr={:.1f}s;'.format(
@@ -453,7 +495,8 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Parse parameters')
     # Argument for model name
-    parser.add_argument("model", help="one of vae_with_no_kl_no_mmd}")
+    parser.add_argument("model",
+                        help="one of vae_normal_with_1_kl_0_mmd or pixelvae_categorical_with_1_kl_0_mmd or pixelcnn_4}")
     parser.add_argument("--dataset", help="one of MNIST, MovingMNIST}", default="MovingMNIST")
     parser.add_argument("--folder_suffix", help="suffix to folder", default="")
     # Argument for systems requirement
@@ -462,10 +505,10 @@ if __name__ == '__main__':
 
     # Argument for more generic stuff regarding dataloader and epochs
     parser.add_argument('--plot_interval', help='plot how many times an epoch', type=int, default=1)
-    parser.add_argument('--epochs', help='how many epochs', type=int, default=10)
-    parser.add_argument('--train_batch_size', help='Batch size for training', type=int, default=256)
-    parser.add_argument('--test_batch_size', help='Batch size for training', type=int, default=256)
-    parser.add_argument('--num_workers', help='Number of workers', type=int, default=8)
+    parser.add_argument('--epochs', help='how many epochs', type=int, default=5)
+    parser.add_argument('--train_batch_size', help='Batch size for training', type=int, default=128)
+    parser.add_argument('--test_batch_size', help='Batch size for training', type=int, default=128)
+    parser.add_argument('--num_workers', help='Number of workers', type=int, default=16)
 
     # Argument for parsing data
     parser.add_argument('--quantization', help='number of bins to quantize in', type=str, default="2")
@@ -473,7 +516,11 @@ if __name__ == '__main__':
     parser.add_argument('--output_dir', help='point to your output directory', type=str, default="output")
 
     # Argument for architecture of the model
-    parser.add_argument('--input_image_size', help='Dimension of input image size', type=int, default=64)
+    parser.add_argument('--input_channels', help='Number of channels for input', type=int, default=1)
+    parser.add_argument('--decoder_out_channels',
+                        help='Number of channels for decoder (only used when model is categorical_pixelvae)', type=int,
+                        default=2)
+    parser.add_argument('--input_image_size', help='Dimension of input image size', type=int, default=32)
     parser.add_argument('--intermediate_channels', help='number of intermediate channels', type=int, default=32)
     parser.add_argument('--z_dimension', help='dimensionality of our latent representation', type=int, default=64)
     parser.add_argument('--sigma_decoder', help='std of our decoder in a only vae architecture', type=float,

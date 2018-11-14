@@ -62,7 +62,6 @@ class VAE_Encoder(nn.Module):
             # N x Z x 2 x 2
 
     def forward(self, x):
-        print("Input image", x.shape)
         '''Block'''
         x_1 = F.relu(self.bn1(self.conv1(x)))  # Stride, 32/2
         x_2 = F.relu(self.bn2(self.conv2(x_1)))  # No stride
@@ -70,7 +69,6 @@ class VAE_Encoder(nn.Module):
         '''Block'''
         x_3 = F.relu(self.bn3(self.conv3(x_1 + x_2)))  # Stride 32/4 = 8, 64/4
         x_4 = F.relu(self.bn4(self.conv4(x_3)))  # No Stride
-
 
         '''Block'''
         x_5 = F.relu(self.bn5(self.conv5(x_4 + x_3)))  # Stride 32/8 = 4, 64/8
@@ -174,8 +172,9 @@ class PixelCNN(nn.Module):
 
 
 class VAE(nn.Module):
-    def __init__(self, in_channels, intermediate_channels, out_channels, z_dimension=32, pixelcnn=True,
-                 only_pixelcnn=True, pixelcnn_layers=4, pixelcnn_activation="ReLu", nll=1, kl=1, mmd=0,
+    def __init__(self, in_channels, intermediate_channels, decoder_out_channels=1, pixelcnn_out_channels=2,
+                 z_dimension=32,
+                 pixelcnn=True, only_pixelcnn=True, pixelcnn_layers=4, pixelcnn_activation="ReLu", nll=1, kl=1, mmd=0,
                  require_rsample=True, sigma_decoder=0.1, input_image_size=64):
         '''
 
@@ -192,32 +191,40 @@ class VAE(nn.Module):
         '''
 
         super(VAE, self).__init__()
+        self.in_channels = in_channels
+        self.z_dimensions = z_dimension
+        self.decoder_out_channels = decoder_out_channels
+        self.pixelcnn_out_channels = pixelcnn_out_channels
+        self.num_pixelcnn_layers = pixelcnn_layers
         self.require_rsample = require_rsample
 
         self.nll, self.kl, self.mmd = nll, kl, mmd
         self.sigma_decoder = sigma_decoder
         self.input_image_size = input_image_size
         self.only_pixelcnn = only_pixelcnn
+
         if not only_pixelcnn:
             if pixelcnn:
-                decoder_output = in_channels
-                self.pixelcnn = PixelCNN(2 * decoder_output, intermediate_channels, out_channels, pixelcnn_layers, \
+                # TODO : Add abilitiy to choose if you to stack 256 channels of VAE output with 1 channel of input
+                # TODO : Or stack 256 channel of VAE output with 256 channel of VAE input
+                self.pixelcnn = PixelCNN(decoder_out_channels + in_channels, intermediate_channels,
+                                         pixelcnn_out_channels,
+                                         pixelcnn_layers, \
                                          pixelcnn_activation)
 
             else:
-                decoder_output = out_channels
                 self.pixelcnn = None
 
             self.encoder = VAE_Encoder(in_channels, intermediate_channels, z_dimension, require_rsample,
                                        input_image_size)
-            self.decoder = VAE_Decoder(z_dimension, intermediate_channels, decoder_output, input_image_size)
+            self.decoder = VAE_Decoder(z_dimension, intermediate_channels, decoder_out_channels, input_image_size)
             if input_image_size > 32:
                 self.adjust = (64 - input_image_size) // 2
             else:
                 self.adjust = (32 - input_image_size) // 2
 
         else:
-            self.pixelcnn = PixelCNN(in_channels, intermediate_channels, out_channels, pixelcnn_layers, \
+            self.pixelcnn = PixelCNN(in_channels, intermediate_channels, pixelcnn_out_channels, pixelcnn_layers, \
                                      pixelcnn_activation)
 
     def forward(self, x, sample=None):
@@ -231,8 +238,10 @@ class VAE(nn.Module):
                 encoding = mu
 
             decoder_output = self.decoder(encoding)
+
             if self.adjust != 0:
                 decoder_output = decoder_output[:, :, self.adjust:-self.adjust, self.adjust:-self.adjust]
+
             if self.pixelcnn is not None:
                 if self.training:
                     concat = torch.cat([decoder_output, x], dim=1)
@@ -241,8 +250,10 @@ class VAE(nn.Module):
                 reconstruction = self.pixelcnn(concat)
             else:
                 reconstruction = decoder_output
+
         else:
             reconstruction = self.pixelcnn(x)
+
         return mu, logvar, encoding, reconstruction
 
     def get_z_image(self, encoding):
@@ -298,11 +309,45 @@ class VAE(nn.Module):
         if encoding is not None:
             true_samples = torch.randn(target.shape[0], encoding.shape[1]).to(device)
             mmd = self.compute_mmd(true_samples, encoding.view(-1, encoding.shape[1]))
-
-        if self.pixelcnn is not None:
+        # Need cross entropy when pixelcnn exists or when it is plain vae, but number of output_channels from deocder is
+        # greater than number of input_channels
+        if self.pixelcnn is not None or (self.pixelcnn is None and self.decoder_out_channels > self.in_channels):
             px_given_z = self.nll * F.cross_entropy(reconstruction, target, reduction='none').sum()
         else:
             px_given_z = - self.nll * Normal(reconstruction, self.sigma_decoder).log_prob(target).sum()
 
         loss = (px_given_z + (self.kl * kl) + (self.mmd * mmd)) / target.shape[0]
         return loss, px_given_z.item() / target.shape[0], kl.item() / target.shape[0], mmd.item() / target.shape[0]
+
+    def __repr__(self):
+        string = ""
+
+        pixelcnn_input = str(self.input_image_size) + "x" + str(self.input_image_size) + "x"
+        if self.only_pixelcnn:
+            pixelcnn_used = "by itself"
+            pixelcnn_input += str(self.in_channels)
+        else:
+            pixelcnn_used = "in the decoder"
+            pixelcnn_input += str(self.in_channels + self.decoder_out_channels)
+            rsample_text = ""
+            if self.require_rsample:
+                rsample_text = " Where Z is rsampled from a Normal Distribution."
+            string += "We are using an encoder which takes input of " + str(self.input_image_size) + "x" + str(
+                self.input_image_size) + "x" + str(self.in_channels) + " and encodes into " + str(self.z_dimensions) + \
+                      " dimensional latent space." + rsample_text + \
+                      " \nIt is then pushed into a decoder which outputs an image of dimension " + \
+                      str(self.input_image_size) + "x" + str(self.input_image_size) + "x" + str(
+                self.decoder_out_channels) + ".\n"
+
+        if self.pixelcnn is None:
+            if self.decoder_out_channels == self.in_channels:
+                string += "We assume p(x/z) follows a normal distribution with mean x_recon and sigma " + str(
+                    self.sigma_decoder) + ".\n"
+            else:
+                string += "We assume p(x/z) follows a categorical distribution. \n"
+        else:
+            string += "We are using PixelCNN " + pixelcnn_used + " which takes an input of " + pixelcnn_input + \
+                      " dimension goes through " + str(self.num_pixelcnn_layers) + " layers and outputs a " \
+                      + str(self.input_image_size) + "x" + str(self.input_image_size) + "x" + str(
+                self.pixelcnn_out_channels) + " dimensions image"
+        return string
