@@ -214,15 +214,15 @@ def plot_vae(model, device, image, reconstruction, encoding, directory, epoch, p
 
     ax = plt.subplot(1, 2, 1)
     ax.set_title("Input")
-    plt.imshow(image[:3].view(-1, model.input_image_size), cmap='gray')
+    plt.imshow(image[:6].view(-1, model.input_image_size), cmap='gray')
     ax.axis("off")
 
     ax = plt.subplot(1, 2, 2)
     ax.set_title("Reconstruction")
     if model.decoder_out_channels > model.in_channels:
-        plt.imshow(reconstruction[:3].argmax(dim=1).contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+        plt.imshow(reconstruction[:6].argmax(dim=1).contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
     else:
-        plt.imshow(reconstruction[:3].contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+        plt.imshow(reconstruction[:6].contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
 
     ax.axis("off")
 
@@ -231,7 +231,7 @@ def plot_vae(model, device, image, reconstruction, encoding, directory, epoch, p
     ''' Sampling from z'''
     fig = plt.figure(figsize=(3, 9))
     fig.suptitle("Sampling from Normal(0,1) Z")
-    random_encoding = torch.randn(encoding[:3].shape).to(device)
+    random_encoding = torch.randn(encoding[:6].shape).to(device)
     output_random_encoding = model.get_reconstruction(random_encoding)
     plt.imshow(output_random_encoding.contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
     fig.savefig(directory + "/normal_sampling-" + str(epoch) + "-" + str(plot_count))
