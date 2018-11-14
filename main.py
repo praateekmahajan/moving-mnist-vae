@@ -233,7 +233,10 @@ def plot_vae(model, device, image, reconstruction, encoding, directory, epoch, p
     fig.suptitle("Sampling from Normal(0,1) Z")
     random_encoding = torch.randn(encoding[:6].shape).to(device)
     output_random_encoding = model.get_reconstruction(random_encoding)
-    plt.imshow(output_random_encoding.contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+    if model.decoder_out_channels > model.in_channels:
+        plt.imshow(output_random_encoding[:6].argmax(dim=1).contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+    else:
+        plt.imshow(output_random_encoding[:6].contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
     fig.savefig(directory + "/normal_sampling-" + str(epoch) + "-" + str(plot_count))
 
 
@@ -385,7 +388,6 @@ def train(model, data_loader, optimizer, device, args, epoch=0, data_mean=0, dat
             target = image
         mu, logvar, encoding, reconstruction = model(image)
         loss, pxz_loss, kl_loss, mmd_loss = model.loss(target, mu, logvar, encoding, reconstruction, device)
-
         if index % plot_every == 0:
             # It is VAE since there is no PixelCNN
             if model.pixelcnn is None:
