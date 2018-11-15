@@ -171,7 +171,7 @@ def scatter_plot(encoding, directory, epoch, plot_count):
     x_lim = np.absolute([X.min(), X.max()]).max() + 4
     y_lim = np.absolute([Y.min(), Y.max()]).max() + 4
 
-    fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(6, 3), sharex=True, sharey=True)
+    fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(6, 6), sharex=True, sharey=True)
     fig.suptitle("Plotting p(z) and q(z/x)")
     ax[0].set_xlim(-x_lim, x_lim)
     ax[0].set_ylim(-y_lim, y_lim)
@@ -210,7 +210,7 @@ def plot_vae(model, device, image, reconstruction, encoding, directory, epoch, p
         scatter = scatter_plot(encoding, directory, epoch, plot_count)
 
         ''' Plotting reconstructions '''
-        fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(8, 8), sharex=True, sharey=True)
+        fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(6, 6), sharex=True, sharey=True)
 
         fig.suptitle("Reconstructions using z_image (encoding)", y=1.04)
 
@@ -228,17 +228,20 @@ def plot_vae(model, device, image, reconstruction, encoding, directory, epoch, p
         ax[1].axis("off")
         recon = fig2data(fig)
         fig.savefig(directory + "/recon-" + str(epoch) + "-" + str(plot_count))
-
+        plt.close()
         ''' Sampling from z'''
-        fig = plt.figure(figsize=(3, 9))
+
+        fig, ax = plt.subplots(1, figsize=(6, 6))
         fig.suptitle("Sampling from Normal(0,1) Z")
+
         random_encoding = torch.randn(encoding[:6].shape).to(device)
         output_random_encoding = model.get_reconstruction(random_encoding)
         if model.decoder_out_channels > model.in_channels:
-            plt.imshow(output_random_encoding[:6].argmax(dim=1).contiguous().view(-1, model.input_image_size).detach(),
+            ax.imshow(output_random_encoding[:6].argmax(dim=1).contiguous().view(-1, model.input_image_size).detach(),
                        cmap='gray')
         else:
-            plt.imshow(output_random_encoding[:6].contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+            ax.imshow(output_random_encoding[:6].contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+        ax.axis("off")
         normal_recon = fig2data(fig)
         fig.savefig(directory + "/normal_sampling-" + str(epoch) + "-" + str(plot_count))
         return scatter, recon, normal_recon
@@ -402,7 +405,7 @@ def train(model, data_loader, optimizer, device, args, epoch=0, data_mean=0, dat
         loss.backward()
         optimizer.step()
 
-        if index % plot_every == 0:
+        if index + 1 % plot_every == 0:
             # It is VAE since there is no PixelCNN
             scatter, normal_recon, recon = 0,0,0
             if model.pixelcnn is None:
@@ -417,7 +420,7 @@ def train(model, data_loader, optimizer, device, args, epoch=0, data_mean=0, dat
                               data_std)
 
             plt.close('all')
-            wandb.log({"nll": np.mean(px_given_z), "kl": np.mean(kl), "mmd": np.mean(mmd),
+            wandb.log({"nll": px_given_z, "kl": kl, "mmd": mmd,
                        "Scatter Plot": wandb.Image(scatter), "Reconstruction": wandb.Image(recon),
                        "Normal Reconstruction": wandb.Image(normal_recon)})
             plot_count += 1
