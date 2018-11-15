@@ -5,14 +5,6 @@ from torch import nn
 from torch.distributions import Normal
 from torch.nn import functional as F
 
-# from pixlcnn import *
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"  # see issue #152
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
-
-MNIST_PATH = 'data/mnist'
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-
 # replace this with torch.distributions
 def kl_divergence(encoding_mu, encoding_logvar):
     return -0.5 * torch.sum(encoding_logvar - (encoding_logvar).exp() - encoding_mu.pow(2) + 1)
@@ -253,7 +245,6 @@ class VAE(nn.Module):
 
         else:
             reconstruction = self.pixelcnn(x)
-
         return mu, logvar, encoding, reconstruction
 
     def get_z_image(self, encoding):

@@ -82,7 +82,6 @@ def select_model(args):
             # If it is PixelVAE and it is not normal then out_channels should be > in_channels
             if not model_params['is_decoder_out_normal']:
                 assert args.decoder_out_channels > args.input_channels, "decoder_out_channels should be > input_channels when categorical_pixelvae else simply use normal_pixelvae"
-
         else:
             model_params['model_name'] = "VAE"
 
@@ -90,7 +89,7 @@ def select_model(args):
     #     model_params['use_pixelcnn'] == (
     #         args.sigma_decoder == 0)), "sigma_decoder should be 0 when using vae and non-zero when using pixelvae/pixelcnn"
     assert not (
-        model_params['is_decoder_out_normal'] == (
+        model_params['is_decoder_out_normal'] and not use_pixelcnn == (
             args.sigma_decoder == 0)), "sigma_decoder should be 0 when using vae and non-zero when using pixelvae/pixelcnn"
 
     if model_params['use_pixelcnn']:
@@ -211,7 +210,6 @@ def plot_vae(model, device, image, reconstruction, encoding, directory, epoch, p
 
         ''' Plotting reconstructions '''
         fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(6, 6), sharex=True, sharey=True)
-
         fig.suptitle("Reconstructions using z_image (encoding)", y=1.04)
 
         ax[0].set_title("Input")
@@ -249,121 +247,116 @@ def plot_vae(model, device, image, reconstruction, encoding, directory, epoch, p
 
 def plot_pixelcnn(model, device, image, reconstruction, directory, epoch, plot_count, data_mean, data_std):
     ''' Plotting reconstructions '''
-    fig = plt.figure(figsize=(8, 8))
-    plt.suptitle("Reconstructions of Original Image", y=1.04)
 
-    ax = plt.subplot(1, 2, 1)
-    ax.set_title("Input")
-    plt.imshow(image[:3].view(-1, model.input_image_size), cmap='gray')
-    ax.axis("off")
+    fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(6, 6))
+    fig.suptitle("Reconstructions using z_image (encoding)", y=1.04)
 
-    ax = plt.subplot(1, 2, 2)
-    ax.set_title("Reconstruction")
-    plt.imshow(reconstruction[:3].argmax(dim=1).contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
-    ax.axis("off")
+    ax[0].set_title("Input")
+    ax[0].imshow(image[:6].view(-1, model.input_image_size), cmap='gray')
+    ax[0].axis("off")
+
+    ax[1].set_title("Reconstruction")
+    ax[1].imshow(reconstruction[:6].argmax(dim=1).contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+    ax[1].axis("off")
+    recon = fig2data(fig)
     fig.savefig(directory + "/recon-" + str(epoch) + "-" + str(plot_count))
-
     ''' Sampling from z'''
-    sample = torch.zeros(image[:10].shape).to(device) - data_mean / data_std
+    sample = torch.zeros(image[:6].shape).to(device) - data_mean / data_std
     argmax_from_sampling, sample_from_sampling = generate_only_pixelcnn(sample, model, data_mean,
                                                                         data_std)
 
-    fig = plt.figure(figsize=(3, 9))
-    fig.suptitle("Sampling from Normal(0,1) Z")
-    ax = plt.subplot(1, 2, 1)
-    ax.set_title("Sample (max)")
-    plt.imshow(argmax_from_sampling.argmax(dim=1).contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
-    ax.axis("off")
+    fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(6, 6))
+    fig.suptitle("Sampling from Normal Z", y=1.04)
 
-    ax = plt.subplot(1, 2, 2)
-    ax.set_title("Sample")
-    plt.imshow(sample_from_sampling.view(-1, model.input_image_size).detach(), cmap='gray')
-    ax.axis("off")
+    ax[0].set_title("Sample (max)")
+    ax[0].imshow(argmax_from_sampling.argmax(dim=1).contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+    ax[0].axis("off")
+
+    ax[1].set_title("Sample")
+    ax[1].imshow(sample_from_sampling.view(-1, model.input_image_size).detach(), cmap='gray')
+    ax[1].axis("off")
+    normal_recon = fig2data(fig)
+
     fig.savefig(directory + "/sample-" + str(epoch) + "-" + str(plot_count))
-
+    return None, recon, normal_recon
 
 def plot_pixelvae(model, device, image, reconstruction, encoding, directory, epoch, plot_count, data_mean,
                   data_std):
     model.eval()
 
-    z_image = model.get_z_image(encoding[:3])
-    sample = torch.zeros(z_image.shape).to(device)
+    z_image = model.get_z_image(encoding[:6])
+    sample = torch.zeros(image[:6].shape).to(device)
     argmax_from_no_teacher_forcing, sample_from_no_teacher_forcing = generate(z_image, sample, model, data_mean,
                                                                               data_std)
 
-    random_encoding = torch.randn(encoding[:3].shape).to(device)
+    random_encoding = torch.randn(encoding[:6].shape).to(device)
     random_z_image = model.get_z_image(random_encoding)
     argmax_z_from_no_teacher_forcing, sample_z_from_no_teacher_forcing = generate(random_z_image, sample, model,
                                                                                   data_mean,
                                                                                   data_std)
-    z_encoding_image_concat = torch.cat([random_z_image, image[:3]], dim=1)
+    z_encoding_image_concat = torch.cat([random_z_image, image[:6]], dim=1)
 
     ''' Plotting p(z) and q(z/x) '''
-    scatter_plot(encoding, directory, epoch, plot_count)
+    scatter = scatter_plot(encoding, directory, epoch, plot_count)
 
     ''' Plotting reconstruction from z_image '''
-    fig = plt.figure(figsize=(15, 9))
-    plt.suptitle("Reconstructions using z_image (encoding)", y=1.04)
+    fig, ax = plt.subplots(nrows=1, ncols=5, figsize=(8, 8), sharex=True, sharey=True)
+    fig.suptitle("Reconstructions using z_image (encoding)", y=1.04)
 
-    ax = plt.subplot(1, 5, 1)
-    ax.set_title("Input")
-    plt.imshow(image[:3].view(-1, model.input_image_size), cmap='gray')
-    ax.axis("off")
+    ax[0].set_title("Input")
+    ax[0].imshow(image[:6].view(-1, model.input_image_size), cmap='gray')
+    ax[0].axis("off")
 
-    ax = plt.subplot(1, 5, 2)
-    ax.set_title("real z_image")
-    plt.imshow(z_image.contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
-    ax.axis("off")
+    ax[1].set_title("real z_image")
+    ax[1].imshow(z_image.contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+    ax[1].axis("off")
 
-    ax = plt.subplot(1, 5, 3)
-    ax.set_title("Recon w tf (max)")
-    plt.imshow(reconstruction[:3].argmax(dim=1).contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
-    ax.axis("off")
+    ax[2].set_title("Recon w tf (max)")
+    ax[2].imshow(reconstruction[:6].argmax(dim=1).contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+    ax[2].axis("off")
 
-    ax = plt.subplot(1, 5, 4)
-    ax.set_title("Recon w/o tf (max)")
-    plt.imshow(argmax_from_no_teacher_forcing.argmax(dim=1).view(-1, model.input_image_size).detach(), cmap='gray')
-    ax.axis("off")
+    ax[3].set_title("Recon w/o tf (max)")
+    ax[3].imshow(argmax_from_no_teacher_forcing.argmax(dim=1).view(-1, model.input_image_size).detach(), cmap='gray')
+    ax[3].axis("off")
 
-    ax = plt.subplot(1, 5, 5)
-    ax.set_title("Recon w/o tf (sample)")
-    plt.imshow(sample_from_no_teacher_forcing.view(-1, model.input_image_size).detach(), cmap='gray')
-    ax.axis("off")
+    ax[4].set_title("Recon w/o tf (sample)")
+    ax[4].imshow(sample_from_no_teacher_forcing.view(-1, model.input_image_size).detach(), cmap='gray')
+    ax[4].axis("off")
+    recon = fig2data(fig)
+
     fig.savefig(directory + "/recon_z_-" + str(epoch) + "-" + str(plot_count))
+    plt.close()
 
     ''' Plotting reconstructions from normal distribution'''
-    fig = plt.figure(figsize=(15, 9))
-    plt.suptitle("Reconstructions sampling from Normal", y=1.04)
+    fig, ax = plt.subplots(nrows=1, ncols=5, figsize=(8, 8), sharex=True, sharey=True)
+    fig.suptitle("Reconstructions sampling from normal (encoding)", y=1.04)
 
-    ax = plt.subplot(1, 5, 1)
-    ax.set_title("Input")
-    plt.imshow(image[:3].view(-1, model.input_image_size), cmap='gray')
-    ax.axis("off")
+    ax[0].set_title("Input")
+    ax[0].imshow(image[:6].view(-1, model.input_image_size), cmap='gray')
+    ax[0].axis("off")
 
-    ax = plt.subplot(1, 5, 2)
-    ax.set_title("rand z_image")
-    plt.imshow(random_z_image.contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
-    ax.axis("off")
+    ax[1].set_title("rand z_image")
+    ax[1].imshow(random_z_image.contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+    ax[1].axis("off")
 
-    ax = plt.subplot(1, 5, 3)
-    ax.set_title("Recon w tf")
-    plt.imshow(model.run_pixelcnn(z_encoding_image_concat).argmax(dim=1).contiguous().view(-1,
+    ax[2].set_title("Recon w tf")
+    ax[2].imshow(model.run_pixelcnn(z_encoding_image_concat).argmax(dim=1).contiguous().view(-1,
                                                                                            model.input_image_size).detach(),
                cmap='gray')
-    ax.axis("off")
+    ax[2].axis("off")
 
-    ax = plt.subplot(1, 5, 4)
-    ax.set_title("Recon w/o tf (max)")
-    plt.imshow(argmax_z_from_no_teacher_forcing.argmax(dim=1).view(-1, model.input_image_size).detach(), cmap='gray')
-    ax.axis("off")
+    ax[3].set_title("Recon w/o tf (max)")
+    ax[3].imshow(argmax_z_from_no_teacher_forcing.argmax(dim=1).view(-1, model.input_image_size).detach(), cmap='gray')
+    ax[3].axis("off")
 
-    ax = plt.subplot(1, 5, 5)
-    ax.set_title("Recon w/o tf (sample)")
-    plt.imshow(sample_z_from_no_teacher_forcing.view(-1, model.input_image_size).detach(), cmap='gray')
-    ax.axis("off")
+    ax[4].set_title("Recon w/o tf (sample)")
+    ax[4].imshow(sample_z_from_no_teacher_forcing.view(-1, model.input_image_size).detach(), cmap='gray')
+    ax[4].axis("off")
+    normal_recon = fig2data(fig)
+
     fig.savefig(directory + "/normal-recon-" + str(epoch) + "-" + str(plot_count))
 
-    return
+    return scatter, recon, normal_recon
 
 
 def train(model, data_loader, optimizer, device, args, epoch=0, data_mean=0, data_std=1, plot_every=200,
@@ -405,24 +398,29 @@ def train(model, data_loader, optimizer, device, args, epoch=0, data_mean=0, dat
         loss.backward()
         optimizer.step()
 
-        if index + 1 % plot_every == 0:
+        if index % plot_every == 0:
+            log_dictionary = {"nll": np.mean(px_given_z), "kl": np.mean(kl), "mmd": np.mean(mmd)}
             # It is VAE since there is no PixelCNN
             scatter, normal_recon, recon = 0,0,0
             if model.pixelcnn is None:
-                scatter, normal_recon, recon = plot_vae(model, device, image, reconstruction, encoding, directory,
+                scatter, recon, normal_recon  = plot_vae(model, device, image, reconstruction, encoding, directory,
                                                         epoch, plot_count)
+                log_dictionary['Scatter Plot'] = wandb.Image(scatter)
+
             # It is PixelCNN only model
             elif model.only_pixelcnn:
-                plot_pixelcnn(model, device, image, reconstruction, directory, epoch, plot_count, data_mean, data_std)
+                _, recon, normal_recon,  = plot_pixelcnn(model, device, image, reconstruction, directory, epoch, plot_count, data_mean, data_std)
             # It is PixelVAE model
             else:
-                plot_pixelvae(model, device, image, reconstruction, encoding, directory, epoch, plot_count, data_mean,
+                scatter, recon, normal_recon = plot_pixelvae(model, device, image, reconstruction, encoding, directory, epoch, plot_count, data_mean,
                               data_std)
+                log_dictionary['Scatter Plot'] = wandb.Image(scatter)
+            log_dictionary['Normal Reconstruction'] = wandb.Image(normal_recon)
+            log_dictionary['Reconstruction'] = wandb.Image(normal_recon)
 
             plt.close('all')
-            wandb.log({"nll": px_given_z, "kl": kl, "mmd": mmd,
-                       "Scatter Plot": wandb.Image(scatter), "Reconstruction": wandb.Image(recon),
-                       "Normal Reconstruction": wandb.Image(normal_recon)})
+
+            wandb.log(log_dictionary)
             plot_count += 1
 
     time_tr = time.time() - time_tr
@@ -541,7 +539,7 @@ if __name__ == '__main__':
 
     # Argument for more generic stuff regarding dataloader and epochs
     parser.add_argument('--plot_interval', help='plot how many times an epoch', type=int, default=1)
-    parser.add_argument('--epochs', help='how many epochs', type=int, default=5)
+    parser.add_argument('--epochs', help='how many epochs', type=int, default=10)
     parser.add_argument('--train_batch_size', help='Batch size for training', type=int, default=128)
     parser.add_argument('--test_batch_size', help='Batch size for training', type=int, default=128)
     parser.add_argument('--num_workers', help='Number of workers', type=int, default=16)
