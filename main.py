@@ -6,13 +6,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
+import wandb
 from sklearn.externals import joblib
 from torch import optim
 from torchvision import transforms
 from tqdm import tqdm
 
 from model import VAE
-from utils import isFloat, isInt, add_bool_arg, train, get_dataset
+from utils import isFloat, isInt, add_bool_arg, train, get_dataset, fig2data
 
 MNIST_PATH = 'data/mnist'
 
@@ -59,7 +60,8 @@ def select_model(args):
         only_pixelcnn = True
         use_pixelcnn = True
         args.num_pixelcnn_layers = int(splits[1])
-        model_params = {'is_decoder_out_normal': False, 'only_pixelcnn': only_pixelcnn, 'use_pixelcnn': use_pixelcnn,
+        model_params = {'model_name': "PixelCNN", 'is_decoder_out_normal': False, 'only_pixelcnn': only_pixelcnn,
+                        'use_pixelcnn': use_pixelcnn,
                         "coeff_kl": 0., "coeff_mmd": 0.}
 
     # It is either pixelvae or vae
@@ -75,23 +77,25 @@ def select_model(args):
         # If we are using normal distribution for P(x_hat/z) in decoder-output, then
         model_params = {'is_decoder_out_normal': is_normal, 'only_pixelcnn': False, 'use_pixelcnn': use_pixelcnn,
                         "coeff_kl": float(splits[2]), "coeff_mmd": float(splits[4])}
+        if use_pixelcnn:
+            model_params['model_name'] = "PixelVAE"
+            # If it is PixelVAE and it is not normal then out_channels should be > in_channels
+            if not model_params['is_decoder_out_normal']:
+                assert args.decoder_out_channels > args.input_channels, "decoder_out_channels should be > input_channels when categorical_pixelvae else simply use normal_pixelvae"
 
-    # If it is PixelVAE and it is not normal then out_channels should be > in_channels
-    if use_pixelcnn and not only_pixelcnn:
-        if not model_params['is_decoder_out_normal']:
-            assert args.decoder_out_channels > args.input_channels, "decoder_out_channels should be > input_channels when categorical_pixelvae else simply use normal_pixelvae"
-    print(model_params['is_decoder_out_normal'], args.sigma_decoder == 0)
+        else:
+            model_params['model_name'] = "VAE"
 
     # assert (
     #     model_params['use_pixelcnn'] == (
     #         args.sigma_decoder == 0)), "sigma_decoder should be 0 when using vae and non-zero when using pixelvae/pixelcnn"
     assert not (
-         model_params['is_decoder_out_normal'] == (
+        model_params['is_decoder_out_normal'] == (
             args.sigma_decoder == 0)), "sigma_decoder should be 0 when using vae and non-zero when using pixelvae/pixelcnn"
 
     if model_params['use_pixelcnn']:
         assert (
-        args.num_pixelcnn_layers >= 2), "num of pixelcnn layers should be greater than 2 when using pixelvae/pixelcnn"
+            args.num_pixelcnn_layers >= 2), "num of pixelcnn layers should be greater than 2 when using pixelvae/pixelcnn"
     if model_params['use_pixelcnn']:
         assert (model_params['use_pixelcnn'] and (
             args.pixelcnn_activation == "ReLu" or args.pixelcnn_activation == "ELU")), "Choose either Relu or ELU"
@@ -105,8 +109,7 @@ def select_model(args):
     model_params['input_image_size'] = args.input_image_size
     model_params['num_pixelcnn_layers'] = args.num_pixelcnn_layers
     model_params['pixelcnn_activation'] = args.pixelcnn_activation
-
-    # If PixelVAE
+    model_params['coeff_nll'] = args.nll
 
     # Could be PixelCNN or PixelVAE
     if use_pixelcnn:
@@ -136,11 +139,13 @@ def select_model(args):
                 z_dimension=model_params['z_dimension'],
                 pixelcnn=model_params['use_pixelcnn'], only_pixelcnn=model_params['only_pixelcnn'],
                 pixelcnn_layers=model_params['num_pixelcnn_layers'],
-                pixelcnn_activation=model_params['pixelcnn_activation'], nll=1, kl=model_params['coeff_kl'],
+                pixelcnn_activation=model_params['pixelcnn_activation'], nll=model_params['coeff_nll'],
+                kl=model_params['coeff_kl'],
                 mmd=model_params['coeff_mmd'], require_rsample=model_params['require_rsample'],
-                sigma_decoder=model_params['sigma_decoder'], input_image_size=model_params['input_image_size'])
+                sigma_decoder=model_params['sigma_decoder'], input_image_size=model_params['input_image_size']
+                )
     print(model)
-    return model
+    return model, model_params
 
 
 def show_data(x, imsize):
@@ -166,21 +171,17 @@ def scatter_plot(encoding, directory, epoch, plot_count):
     x_lim = np.absolute([X.min(), X.max()]).max() + 4
     y_lim = np.absolute([Y.min(), Y.max()]).max() + 4
 
-    fig = plt.figure(figsize=(6, 3))
-    plt.suptitle("Plotting p(z) and q(z/x)")
+    fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(6, 3), sharex=True, sharey=True)
+    fig.suptitle("Plotting p(z) and q(z/x)")
+    ax[0].set_xlim(-x_lim, x_lim)
+    ax[0].set_ylim(-y_lim, y_lim)
+    ax[0].set_title("p(z)")
+    ax[0].scatter(randn[:, 0], randn[:, 1], alpha=0.1)
 
-    ax = plt.subplot(1, 2, 1)
-    ax.set_title("p(z)")
-    plt.xlim(-x_lim, x_lim)
-    plt.ylim(-y_lim, y_lim)
-    plt.scatter(randn[:, 0], randn[:, 1], alpha=0.1)
-
-    ax = plt.subplot(1, 2, 2)
-    ax.set_title("q(z/x)")
-    plt.xlim(-x_lim, x_lim)
-    plt.ylim(-y_lim, y_lim)
-    plt.scatter(X, Y, alpha=0.1)
+    ax[1].set_title("q(z/x)")
+    ax[1].scatter(X, Y, alpha=0.1)
     fig.savefig(directory + "/scatter-" + str(epoch) + "-" + str(plot_count))
+    return fig2data(fig)
 
 
 def generate_only_pixelcnn(sample, model, data_mean, data_std):
@@ -204,40 +205,43 @@ def generate(z_image, sample, model, data_mean, data_std):
 
 def plot_vae(model, device, image, reconstruction, encoding, directory, epoch, plot_count):
     model.eval()
+    with torch.no_grad():
+        ''' Plotting p(z) and q(z/x)'''
+        scatter = scatter_plot(encoding, directory, epoch, plot_count)
 
-    ''' Plotting p(z) and q(z/x)'''
-    scatter_plot(encoding, directory, epoch, plot_count)
+        ''' Plotting reconstructions '''
+        fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(8, 8), sharex=True, sharey=True)
 
-    ''' Plotting reconstructions '''
-    fig = plt.figure(figsize=(8, 8))
-    plt.suptitle("Reconstructions using z_image (encoding)", y=1.04)
+        fig.suptitle("Reconstructions using z_image (encoding)", y=1.04)
 
-    ax = plt.subplot(1, 2, 1)
-    ax.set_title("Input")
-    plt.imshow(image[:6].view(-1, model.input_image_size), cmap='gray')
-    ax.axis("off")
+        ax[0].set_title("Input")
+        ax[0].imshow(image[:6].view(-1, model.input_image_size), cmap='gray')
+        ax[0].axis("off")
 
-    ax = plt.subplot(1, 2, 2)
-    ax.set_title("Reconstruction")
-    if model.decoder_out_channels > model.in_channels:
-        plt.imshow(reconstruction[:6].argmax(dim=1).contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
-    else:
-        plt.imshow(reconstruction[:6].contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+        ax[1].set_title("Reconstruction")
+        if model.decoder_out_channels > model.in_channels:
+            ax[1].imshow(reconstruction[:6].argmax(dim=1).contiguous().view(-1, model.input_image_size).detach(),
+                       cmap='gray')
+        else:
+            ax[1].imshow(reconstruction[:6].contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
 
-    ax.axis("off")
+        ax[1].axis("off")
+        recon = fig2data(fig)
+        fig.savefig(directory + "/recon-" + str(epoch) + "-" + str(plot_count))
 
-    fig.savefig(directory + "/recon-" + str(epoch) + "-" + str(plot_count))
-
-    ''' Sampling from z'''
-    fig = plt.figure(figsize=(3, 9))
-    fig.suptitle("Sampling from Normal(0,1) Z")
-    random_encoding = torch.randn(encoding[:6].shape).to(device)
-    output_random_encoding = model.get_reconstruction(random_encoding)
-    if model.decoder_out_channels > model.in_channels:
-        plt.imshow(output_random_encoding[:6].argmax(dim=1).contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
-    else:
-        plt.imshow(output_random_encoding[:6].contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
-    fig.savefig(directory + "/normal_sampling-" + str(epoch) + "-" + str(plot_count))
+        ''' Sampling from z'''
+        fig = plt.figure(figsize=(3, 9))
+        fig.suptitle("Sampling from Normal(0,1) Z")
+        random_encoding = torch.randn(encoding[:6].shape).to(device)
+        output_random_encoding = model.get_reconstruction(random_encoding)
+        if model.decoder_out_channels > model.in_channels:
+            plt.imshow(output_random_encoding[:6].argmax(dim=1).contiguous().view(-1, model.input_image_size).detach(),
+                       cmap='gray')
+        else:
+            plt.imshow(output_random_encoding[:6].contiguous().view(-1, model.input_image_size).detach(), cmap='gray')
+        normal_recon = fig2data(fig)
+        fig.savefig(directory + "/normal_sampling-" + str(epoch) + "-" + str(plot_count))
+        return scatter, recon, normal_recon
 
 
 def plot_pixelcnn(model, device, image, reconstruction, directory, epoch, plot_count, data_mean, data_std):
@@ -387,11 +391,23 @@ def train(model, data_loader, optimizer, device, args, epoch=0, data_mean=0, dat
                 (image.float().view(-1, 1, model.input_image_size, model.input_image_size) - data_mean) / (data_std))
             target = image
         mu, logvar, encoding, reconstruction = model(image)
-        loss, pxz_loss, kl_loss, mmd_loss = model.loss(target, mu, logvar, encoding, reconstruction, device)
+        loss, pxz_loss, kl_loss, mmd_loss = model.loss(target, mu, logvar, encoding, reconstruction, device, args)
+
+        # Loss tracking
+        curr_loss.append(loss.item())
+        px_given_z.append(pxz_loss)
+        kl.append(kl_loss)
+        mmd.append(mmd_loss)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
         if index % plot_every == 0:
             # It is VAE since there is no PixelCNN
+            scatter, normal_recon, recon = 0,0,0
             if model.pixelcnn is None:
-                plot_vae(model, device, image, reconstruction, encoding, directory, epoch, plot_count)
+                scatter, normal_recon, recon = plot_vae(model, device, image, reconstruction, encoding, directory,
+                                                        epoch, plot_count)
             # It is PixelCNN only model
             elif model.only_pixelcnn:
                 plot_pixelcnn(model, device, image, reconstruction, directory, epoch, plot_count, data_mean, data_std)
@@ -400,19 +416,11 @@ def train(model, data_loader, optimizer, device, args, epoch=0, data_mean=0, dat
                 plot_pixelvae(model, device, image, reconstruction, encoding, directory, epoch, plot_count, data_mean,
                               data_std)
 
+            plt.close('all')
+            wandb.log({"nll": np.mean(px_given_z), "kl": np.mean(kl), "mmd": np.mean(mmd),
+                       "Scatter Plot": wandb.Image(scatter), "Reconstruction": wandb.Image(recon),
+                       "Normal Reconstruction": wandb.Image(normal_recon)})
             plot_count += 1
-
-
-        # Loss tracking
-        curr_loss.append(loss.item())
-        px_given_z.append(pxz_loss)
-        kl.append(kl_loss)
-        mmd.append(mmd_loss)
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
 
     time_tr = time.time() - time_tr
     print('Epoch={:d}; Loss={:0.5f} NLL={:.3f}; KL={:.3f}; MMD={:.3f}; time_tr={:.1f}s;'.format(
@@ -434,10 +442,29 @@ def main(args):
 
     # TODO : Add abilitiy for more than Adam optimizer
 
-    model = select_model(args).to(device)
-    optimizer = optim.Adam(list(model.parameters()))
+    wandb.init()
 
-    print(args.model + " has been loaded")
+    # args.wandb = wandb
+    model, model_params = select_model(args)
+    model = model.to(device)
+
+    directory = create_directory(args)
+    joblib.dump(model_params, directory + "/args.dump")
+
+    config = wandb.config
+    wandb.hook_torch(model)
+    config.model_name = model_params['model_name']
+    config.quantization = args.quantization
+    config.input_image = args.input_image_size
+    config.kl = model_params['coeff_kl']
+    config.mmd = model_params['coeff_mmd']
+    config.update(args)
+    if model_params['model_name'] == "PixelCNN" or model_params['model_name'] == "PixelVAE":
+        config.num_pixelcnn_layers = args.num_pixelcnn_layers
+    if model_params['model_name'] == "PixelVAE" or model_params['model_name'] == "VAE":
+        config.decoder_output_channels = model.decoder_out_channels
+
+    optimizer = optim.Adam(list(model.parameters()))
 
     '''
     Next let's prepare data loading
@@ -447,12 +474,18 @@ def main(args):
     kmeans = kmeans_dict['kmeans']
     data_mean = kmeans_dict['data_mean']
     data_std = kmeans_dict['data_std']
+    if not args.weighted_entropy:
+        data_ratio_of_labels = torch.FloatTensor([1] * int(args.quantization))
+    else:
+        data_ratio_of_labels = torch.FloatTensor(kmeans_dict['ratios'])
+
+    # Cheap hack to add data ratio of labels
+    args.data_ratio_of_labels = data_ratio_of_labels
 
     # Select the transformer
     transform = choose_transformer(kmeans, args)
 
     # Create Data Loaders
-
     training_dataset, testing_dataset = get_dataset(args.dataset, args.data_dir, transform=transform,
                                                     target_transform=None)
     train_loader = torch.utils.data.DataLoader(
@@ -470,13 +503,11 @@ def main(args):
         Start Training
     '''
     plot_every = len(training_dataset.train_data) / (args.train_batch_size * int(args.plot_interval))
-    directory = create_directory(args)
 
     total_loss = []
     total_px_given_z = []
     total_kl = []
     total_mmd = []
-    joblib.dump(args, directory + "/args.dump")
     for epoch in range(args.epochs):
         joblib.dump(epoch, directory + "/latest_epoch.dump")
         current_loss, current_px_given_z, current_kl, current_mmd = train(model, train_loader, optimizer, device, args,
@@ -513,7 +544,9 @@ if __name__ == '__main__':
     parser.add_argument('--num_workers', help='Number of workers', type=int, default=16)
 
     # Argument for parsing data
+    parser.add_argument('--nll', help='nll coefficient', type=float, default=1)
     parser.add_argument('--quantization', help='number of bins to quantize in', type=str, default="2")
+    add_bool_arg(parser, 'weighted_entropy', default=False)
     parser.add_argument('--data_dir', help='point to your data directory', type=str, default="data")
     parser.add_argument('--output_dir', help='point to your output directory', type=str, default="output")
 

@@ -1,5 +1,4 @@
 import time
-
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -8,6 +7,7 @@ from sklearn.cluster import KMeans
 from sklearn.externals import joblib
 from torchvision.datasets import MNIST
 from tqdm import tqdm_notebook as tqdm
+import wandb
 
 from movingmnistdataset import MovingMNISTDataset
 
@@ -288,19 +288,25 @@ def save_kmeans_file(n_clusters, dataset="MovingMNIST", folder="data"):
 
     mean_list = []
     std_list = []
+    ratio_list = []
     for i in range(3):
         random_indices = np.random.choice(len(numpy_train_data), 3000, replace=False)
         numpy_sub_train_data = numpy_train_data[random_indices].reshape(-1, 1) / 255
         X = kmeans.predict(numpy_sub_train_data)
+        _, ratio = np.unique(X, return_counts=True)
+        ratio_list.append(ratio/sum(ratio))
         mean_list.append(X.mean())
         std_list.append(X.std())
+
+
+    ratio_list = np.asarray(ratio_list)
     mean_list_avg = round(np.asarray(mean_list).mean(), 4)
     std_list_avg = round(np.asarray(std_list).mean(), 4)
-
-    kmeans_dict = {"kmeans": kmeans, "data_mean": mean_list_avg, "data_std": std_list_avg}
+    ratio_list_average = (ratio_list.sum(axis=0)/ ratio_list.sum()).round(4)
+    kmeans_dict = {"kmeans": kmeans, "data_mean": mean_list_avg, "data_std": std_list_avg, "ratios" : ratio_list_average}
     joblib.dump(kmeans_dict, "data/kmeans_{:}_{:}.model".format(dataset, n_clusters))
 
-    return kmeans.cluster_centers_, mean_list_avg, std_list_avg
+    return kmeans.cluster_centers_, mean_list_avg, std_list_avg,  ratio_list_average
 
 
 def isFloat(s):
@@ -323,3 +329,22 @@ def add_bool_arg(parser, name, default=False):
     group.add_argument('--' + name, dest=name, action='store_true')
     group.add_argument('--no-' + name, dest=name, action='store_false')
     parser.set_defaults(**{name: default})
+
+
+def fig2data(fig):
+    """
+    @brief Convert a Matplotlib figure to a 4D numpy array with RGBA channels and return it
+    @param fig a matplotlib figure
+    @return a numpy 3D array of RGBA values
+    """
+    # draw the renderer
+    fig.canvas.draw()
+
+    # Get the RGBA buffer from the figure
+    w, h = fig.canvas.get_width_height()
+    buf = np.fromstring(fig.canvas.tostring_argb(), dtype=np.uint8)
+    buf.shape = (w, h, 4)
+
+    # canvas.tostring_argb give pixmap in ARGB mode. Roll the ALPHA channel to have it in RGBA mode
+    buf = np.roll(buf, 3, axis=2)
+    return buf

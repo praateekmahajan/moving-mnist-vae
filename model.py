@@ -297,7 +297,7 @@ class VAE(nn.Module):
         mmd = x_kernel.sum() + y_kernel.sum() - 2 * xy_kernel.sum()
         return mmd
 
-    def loss(self, target, encoding_mu, encoding_logvar, encoding, reconstruction, device):
+    def loss(self, target, encoding_mu, encoding_logvar, encoding, reconstruction, device, args):
         kl = torch.tensor(0.).to(device)
         mmd = torch.tensor(0.).to(device)
 
@@ -312,7 +312,8 @@ class VAE(nn.Module):
         # Need cross entropy when pixelcnn exists or when it is plain vae, but number of output_channels from deocder is
         # greater than number of input_channels
         if self.pixelcnn is not None or (self.pixelcnn is None and self.decoder_out_channels > self.in_channels):
-            px_given_z = self.nll * F.cross_entropy(reconstruction, target, reduction='none').sum()
+            px_given_z = self.nll * F.cross_entropy(reconstruction, target, reduction='none',
+                                                    weight=args.data_ratio_of_labels).sum()
         else:
             px_given_z = - self.nll * Normal(reconstruction, self.sigma_decoder).log_prob(target).sum()
 

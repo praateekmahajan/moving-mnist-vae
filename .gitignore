@@ -1,3 +1,5 @@
+wandb*
+wandb
 output
 .idea
 __pycache__
