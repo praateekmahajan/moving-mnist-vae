@@ -475,9 +475,9 @@ def main(args):
     data_mean = kmeans_dict['data_mean']
     data_std = kmeans_dict['data_std']
     if not args.weighted_entropy:
-        data_ratio_of_labels = torch.FloatTensor([1] * int(args.quantization))
+        data_ratio_of_labels = torch.FloatTensor([1] * int(args.quantization)).to(device)
     else:
-        data_ratio_of_labels = torch.FloatTensor(kmeans_dict['ratios'])
+        data_ratio_of_labels = torch.FloatTensor(1 - kmeans_dict['ratios']).to(device)
 
     # Cheap hack to add data ratio of labels
     args.data_ratio_of_labels = data_ratio_of_labels
