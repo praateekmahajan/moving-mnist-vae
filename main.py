@@ -416,7 +416,7 @@ def train(model, data_loader, optimizer, device, args, epoch=0, data_mean=0, dat
                               data_std)
                 log_dictionary['Scatter Plot'] = wandb.Image(scatter)
             log_dictionary['Normal Reconstruction'] = wandb.Image(normal_recon)
-            log_dictionary['Reconstruction'] = wandb.Image(normal_recon)
+            log_dictionary['Reconstruction'] = wandb.Image(recon)
 
             plt.close('all')
 
