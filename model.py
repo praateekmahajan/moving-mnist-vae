@@ -9,80 +9,141 @@ from torch.nn import functional as F
 def kl_divergence(encoding_mu, encoding_logvar):
     return -0.5 * torch.sum(encoding_logvar - (encoding_logvar).exp() - encoding_mu.pow(2) + 1)
 
+def conv3x3(in_planes, out_planes, stride=1):
+    """3x3 convolution with padding"""
+    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
+                     padding=1, bias=False)
 
-class VAE_Encoder(nn.Module):
-    def __init__(self, in_channels, intermediate_channels, z_dimensions, need_logvar=True, input_image_size=32):
-        super(VAE_Encoder, self).__init__()
-        self.input_image_size = input_image_size
-        self.conv1 = nn.Conv2d(in_channels, intermediate_channels, kernel_size=5, stride=2, padding=2, bias=False)
-        self.conv2 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=1, padding=1,
-                               bias=False)
-        self.conv3 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=2, padding=1,
-                               bias=False)
-        self.conv4 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=1, padding=1,
-                               bias=False)
-        self.conv5 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=2, padding=1,
-                               bias=False)
-        self.conv6 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=1, padding=1,
-                               bias=False)
 
-        self.conv7 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=2, padding=1,
-                               bias=False)
-        self.bn1 = nn.BatchNorm2d(intermediate_channels)
-        self.bn2 = nn.BatchNorm2d(intermediate_channels)
-        self.bn3 = nn.BatchNorm2d(intermediate_channels)
-        self.bn4 = nn.BatchNorm2d(intermediate_channels)
-        self.bn5 = nn.BatchNorm2d(intermediate_channels)
-        self.bn6 = nn.BatchNorm2d(intermediate_channels)
-        self.bn7 = nn.BatchNorm2d(intermediate_channels)
+def conv1x1(in_planes, out_planes, stride=1):
+    """1x1 convolution"""
+    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
 
-        if input_image_size > 32:
-            self.conv8 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=1, padding=1,
-                                   bias=False)
-            self.bn8 = nn.BatchNorm2d(intermediate_channels)
-            self.conv9 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=2, padding=1,
-                                   bias=False)
-            self.bn9 = nn.BatchNorm2d(intermediate_channels)
 
-        self.conv_mu = nn.Conv2d(intermediate_channels, z_dimensions, kernel_size=3, stride=2, padding=1, bias=False)
+class BasicBlock(nn.Module):
+    expansion = 1
 
-        if need_logvar == True:
-            self.conv_logvar = nn.Conv2d(intermediate_channels, z_dimensions, kernel_size=3, stride=2, padding=1,
-                                         bias=False)
-        else:
-            self.conv_logvar = None
-            # N x Z x 2 x 2
+    def __init__(self, inplanes, planes, stride=1, downsample=None):
+        super(BasicBlock, self).__init__()
+
+        self.conv1 = conv3x3(inplanes, planes, stride)
+        self.bn1 = nn.BatchNorm2d(planes)
+        self.relu = nn.ReLU(inplace=True)
+
+        self.conv2 = conv3x3(planes, planes)
+        self.bn2 = nn.BatchNorm2d(planes)
+
+        self.downsample = downsample
+        self.stride = stride
 
     def forward(self, x):
-        '''Block'''
-        x_1 = F.relu(self.bn1(self.conv1(x)))  # Stride, 32/2
-        x_2 = F.relu(self.bn2(self.conv2(x_1)))  # No stride
+        identity = x
 
-        '''Block'''
-        x_3 = F.relu(self.bn3(self.conv3(x_1 + x_2)))  # Stride 32/4 = 8, 64/4
-        x_4 = F.relu(self.bn4(self.conv4(x_3)))  # No Stride
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
 
-        '''Block'''
-        x_5 = F.relu(self.bn5(self.conv5(x_4 + x_3)))  # Stride 32/8 = 4, 64/8
-        x_6 = F.relu(self.bn6(self.conv6(x_5)))  # no stride
+        out = self.conv2(out)
+        out = self.bn2(out)
 
-        '''Block'''
-        x_7 = F.relu(self.bn7(self.conv7(x_6 + x_5)))  # stride  32/16 = 2, 64/16 = 4
-        if self.input_image_size > 32:
-            x_8 = F.relu(self.bn8(self.conv8(x_7)))  # Conv7 has no stride
-            '''Add'''
-            x_9 = F.relu(self.bn9(self.conv9(x_8 + x_7)))  # Conv8 has stride  64/32
-            final = x_9
+        if self.downsample is not None:
+            identity = self.downsample(x)
 
-        else:
-            final = x_7
+        out += identity
+        out = self.relu(out)
 
-        mu = self.conv_mu(final)  # 32/64
+        return out
+
+class DeconvBottleneck(nn.Module):
+    def __init__(self, inplanes, planes, stride=1, upsample=None):
+        super(DeconvBottleneck, self).__init__()
+        self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(planes)
+        self.conv2 = nn.ConvTranspose2d(planes, planes ,
+                                        kernel_size=4,
+                                        stride=2, bias=False,
+                                        padding=1)
+        self.bn2 = nn.BatchNorm2d(planes)
+        self.relu = nn.ReLU(inplace=True)
+        self.upsample = upsample
+
+    def forward(self, x):
+        shortcut = x
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        if self.upsample is not None:
+            shortcut = self.upsample(x)
+        out += shortcut
+        out = self.relu(out)
+
+        return out
+
+
+class VAE_Encoder(nn.Module):
+    def __init__(self, in_channels, z_dimensions, need_logvar=True, zero_init_residual=False):
+        super(VAE_Encoder, self).__init__()
+
+        self.inplanes = 32
+
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=5, stride=2, padding=2, bias=False)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.relu = nn.ReLU(inplace=True)
+
+        self.layer1 = self._make_layer(BasicBlock, 32, 1, stride=2)
+        self.layer2 = self._make_layer(BasicBlock, 64, 1, stride=2)
+        self.layer3 = self._make_layer(BasicBlock, 128, 1, stride=2)
+        self.layer4 = self._make_layer(BasicBlock, 256, 1, stride=2)
+
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.conv_mu = conv1x1(256, z_dimensions, 1)
+        self.conv_logvar = None
+        if need_logvar:
+            self.conv_logvar = conv1x1(256, z_dimensions, 1)
+
+        if zero_init_residual:
+            for m in self.modules():
+                if isinstance(m, BasicBlock):
+                    nn.init.constant_(m.bn2.weight, 0)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x = self.avgpool(x)
+
+        mu = self.conv_mu(x)
         logvar = None
         if self.conv_logvar is not None:
-            logvar = self.conv_logvar(final)
+            logvar = self.conv_logvar(x)
 
-        return mu, logvar
+        return (mu, logvar)
+
+    def _make_layer(self, block, planes, blocks, stride=1):
+        downsample = None
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                conv1x1(self.inplanes, planes * block.expansion, stride),
+                nn.BatchNorm2d(planes * block.expansion),
+            )
+
+        layers = []
+        layers.append(block(self.inplanes, planes, stride, downsample))
+        self.inplanes = planes * block.expansion
+        for _ in range(1, blocks):
+            layers.append(block(self.inplanes, planes))
+
+        return nn.Sequential(*layers)
 
     def rsample(self, mu, logvar):
         m = Normal(mu, torch.exp(logvar * 0.5))
@@ -90,31 +151,62 @@ class VAE_Encoder(nn.Module):
 
 
 class VAE_Decoder(nn.Module):
-    def __init__(self, in_channels, intermediate_channels, out_channels, input_image_size=32):
+    def __init__(self, in_channels, out_channels, input_image_size=32, zero_init_residual=False):
         super(VAE_Decoder, self).__init__()
         self.input_image_size = input_image_size
+        self.in_channels = 128
 
-        self.conv1 = nn.Conv2d(in_channels, intermediate_channels, kernel_size=3, stride=1, padding=1, bias=False)
-        self.conv2 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=1, padding=1,
-                               bias=False)
-        self.conv3 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=1, padding=1,
-                               bias=False)
-        self.conv4 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=1, padding=1,
-                               bias=False)
-        if input_image_size > 32:
-            self.conv5 = nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, stride=1, padding=1,
+        self.conv1 = nn.ConvTranspose2d(in_channels, self.in_channels,
+                                   kernel_size=2, stride=1, padding=0,
                                    bias=False)
-        self.conv6 = nn.Conv2d(intermediate_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(self.in_channels)
+
+        self.uplayer1 = self._make_up_block(DeconvBottleneck, 128, 1, stride=1)
+        self.uplayer2 = self._make_up_block(DeconvBottleneck, 64, 1, stride=1)
+        self.uplayer3 = self._make_up_block(DeconvBottleneck, 32, 1, stride=1)
+        self.uplayer4 = self._make_up_block(DeconvBottleneck, 16, 1, stride=1)
+
+        if self.input_image_size > 32:
+            self.uplayer5 = self._make_up_block(DeconvBottleneck, 16, 1, stride=1)
+
+        self.conv2 = nn.Conv2d(16, out_channels, 3, 1, 1)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+
+        if zero_init_residual:
+            for m in self.modules():
+                if isinstance(m, DeconvBottleneck):
+                    nn.init.constant_(m.bn2.weight, 0)
 
     def forward(self, x):
-        x = F.relu(self.conv1(F.interpolate(x, scale_factor=2)))  # 2
-        x = F.relu(self.conv2(F.interpolate(x, scale_factor=2)))  # 4
-        x = F.relu(self.conv3(F.interpolate(x, scale_factor=2)))  # 8
-        x = F.relu(self.conv4(F.interpolate(x, scale_factor=2)))  # 16
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+
+        x = self.uplayer1(x)
+        x = self.uplayer2(x)
+        x = self.uplayer3(x)
+        x = self.uplayer4(x)
+
         if self.input_image_size > 32:
-            x = F.relu(self.conv5(F.interpolate(x, scale_factor=2)))  # 32
-        x = self.conv6(F.interpolate(x, scale_factor=2))  # 64
+            x = self.uplayer5(x)
+        x = self.bn2(self.conv2(x))
         return x
+
+    def _make_up_block(self, block, init_channels, num_layer, stride=1):
+        upsample = nn.Sequential(
+            nn.ConvTranspose2d(self.in_channels, init_channels,
+                                kernel_size=4,
+                                stride=2, bias=False,
+                                padding=1),
+            nn.BatchNorm2d(init_channels)
+        )
+        layers = []
+        for i in range(1, num_layer):
+            layers.append(block(self.in_channels, init_channels))
+        layers.append(block(self.in_channels, init_channels, stride, upsample))
+        self.in_channels = init_channels
+        return nn.Sequential(*layers)
 
 
 class MaskedConv2d(nn.Conv2d):
@@ -207,9 +299,11 @@ class VAE(nn.Module):
             else:
                 self.pixelcnn = None
 
-            self.encoder = VAE_Encoder(in_channels, intermediate_channels, z_dimension, require_rsample,
-                                       input_image_size)
-            self.decoder = VAE_Decoder(z_dimension, intermediate_channels, decoder_out_channels, input_image_size)
+            self.encoder = VAE_Encoder(in_channels, z_dimension, require_rsample,
+                                       zero_init_residual=False)
+
+            self.decoder = VAE_Decoder(z_dimension, decoder_out_channels, input_image_size, zero_init_residual=False)
+
             if input_image_size > 32:
                 self.adjust = (64 - input_image_size) // 2
             else:
